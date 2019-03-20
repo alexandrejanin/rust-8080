@@ -1,0 +1,7 @@
+[package]
+name = "rust-8080"
+version = "0.1.0"
+authors = ["Alexandre Janin <alexandrejanin92@gmail.com>"]
+edition = "2018"
+
+[dependencies]
