@@ -56,7 +56,6 @@ pub struct State8080 {
     memory: [u8; 16384],
     flags: Flags,
     interrupts_enabled: bool,
-    exit: bool,
 }
 
 impl fmt::Display for State8080 {
@@ -102,14 +101,9 @@ impl State8080 {
         self.sp
     }
 
-    pub fn exit(&self) -> bool {
-        self.exit
-    }
-
     pub fn next_opcode(&self) -> String {
         op_name(&self.memory, self.pc)
     }
-
 
     // Private
 
@@ -158,48 +152,64 @@ impl State8080 {
                 aux_carry: false,
             },
             interrupts_enabled: true,
-            exit: false,
         }
     }
 
-    pub fn emulate(&mut self) {
+    /// Steps the emulator `nanos` nanoseconds.
+    /// Returns the number of cycles that were executed.
+    pub fn step(&mut self, nanos: u128) -> u128 {
+        // Simulates 2 MHz
+        let freq = 2_000_000;
+        let step_cycles = (freq * nanos) / 1_000_000_000;
+
+        let mut spent_cycles = 0;
+
+        while spent_cycles < step_cycles {
+            spent_cycles += u128::from(self.emulate());
+        }
+        spent_cycles
+    }
+
+    /// Executes the next instruction.
+    /// Advances PC apporpriately, and returns the number of cycles taken.
+    fn emulate(&mut self) -> u32 {
         let op_code = self.memory[self.pc];
 
-        self.pc += match op_code {
+        let (pc_incr, cycles) = match op_code {
             // NOP
-            0x00 => 1,
+            0x00 => (1, 4),
             // LXI B, D16
             0x01 => {
                 self.b = self.memory[self.pc + 2];
                 self.c = self.memory[self.pc + 1];
-                3
+                (3, 10)
             }
             // STAX B
             0x02 => {
                 self.memory[self.bc() as usize] = self.a;
-                1
+                (1, 7)
             }
             // INX B
             0x03 => {
                 self.set_bc(self.bc() + 1);
-                1
+                (1, 5)
             }
             // INR B
             0x04 => {
                 self.b = self.b.wrapping_add(1);
                 self.set_flags(self.b);
-                1
+                (1, 5)
             }
             // DCR B
             0x05 => {
                 self.b = self.b.wrapping_sub(1);
                 self.set_flags(self.b);
-                1
+                (1, 5)
             }
             // MVI B, D8
             0x06 => {
                 self.b = self.memory[self.pc + 1];
-                2
+                (2, 7)
             }
             // RLC
             0x07 => {
@@ -207,34 +217,34 @@ impl State8080 {
                 self.a <<= 1;
                 self.a |= bit7 >> 7;
                 self.flags.carry = bit7 != 0;
-                1
+                (1, 4)
             }
             // DAD B
             0x09 => {
                 self.set_hl(self.hl() + self.bc());
-                1
+                (1, 10)
             }
             // LDAX B
             0x0a => {
                 self.a = self.memory[self.bc() as usize];
-                1
+                (1, 7)
             }
             // INR C
             0x0c => {
                 self.c = self.c.wrapping_add(1);
                 self.set_flags(self.c);
-                1
+                (1, 5)
             }
             // DCR C
             0x0d => {
                 self.c = self.c.wrapping_sub(1);
                 self.set_flags(self.c);
-                1
+                (1, 5)
             }
             // MVI C, D8
             0x0e => {
                 self.c = self.memory[self.pc + 1];
-                2
+                (2, 7)
             }
             // RRC
             0x0f => {
@@ -242,23 +252,23 @@ impl State8080 {
                 self.a >>= 1;
                 self.a |= bit0 << 7;
                 self.flags.carry = bit0 != 0;
-                1
+                (1, 4)
             }
             // LXI D, D16
             0x11 => {
                 self.d = self.memory[self.pc + 2];
                 self.e = self.memory[self.pc + 1];
-                3
+                (3, 10)
             }
             // INX D
             0x13 => {
                 self.set_de(self.de() + 1);
-                1
+                (1, 5)
             }
             // MVI D, D8
             0x16 => {
                 self.d = self.memory[self.pc + 1];
-                2
+                (2, 7)
             }
             // RAL
             0x17 => {
@@ -266,22 +276,22 @@ impl State8080 {
                 self.a <<= 1;
                 self.a |= self.flags.carry as u8;
                 self.flags.carry = bit7 != 0;
-                1
+                (1, 4)
             }
             // DAD D
             0x19 => {
                 self.set_hl(self.hl() + self.de());
-                1
+                (1, 10)
             }
             // LDAX D
             0x1a => {
                 self.a = self.memory[self.de() as usize];
-                1
+                (1, 7)
             }
             // MVI E, D8
             0x1e => {
                 self.e = self.memory[self.pc + 1];
-                2
+                (2, 7)
             }
             // RAR
             0x1f => {
@@ -290,120 +300,120 @@ impl State8080 {
                 self.a >>= 1;
                 self.a |= bit7;
                 self.flags.carry = bit0 != 0;
-                1
+                (1, 4)
             }
             // NOP
-            0x20 => 1,
+            0x20 => (1, 4),
             // LXI H, D16
             0x21 => {
                 self.h = self.memory[self.pc + 2];
                 self.l = self.memory[self.pc + 1];
-                3
+                (3, 10)
             }
-            // INX B
+            // INX H
             0x23 => {
                 self.set_hl(self.hl() + 1);
-                1
+                (1, 5)
             }
             // MVI H, D8
             0x26 => {
                 self.h = self.memory[self.pc + 1];
-                2
+                (2, 7)
             }
             // DAD H
             0x29 => {
                 self.set_hl(2 * self.hl());
-                1
+                (1, 10)
             }
             // MVI L, D8
             0x2e => {
                 self.l = self.memory[self.pc + 1];
-                2
+                (2, 7)
             }
             // CMA
             0x2f => {
                 self.a = !self.a;
-                1
+                (1, 4)
             }
             // LXI SP, D16
             0x31 => {
                 self.sp = self.address() as usize;
-                3
+                (3, 10)
             }
             // STA adr
             0x32 => {
                 self.memory[self.address() as usize] = self.a;
-                3
+                (3, 13)
             }
             // MVI M, D8
             0x36 => {
                 self.memory[self.hl() as usize] = self.memory[self.pc + 1];
-                2
+                (2, 10)
             }
             // STC
             0x37 => {
                 self.flags.carry = true;
-                1
+                (1, 4)
             }
             // LDA adr
             0x3a => {
                 self.a = self.memory[self.address() as usize];
-                3
+                (3, 13)
             }
             // MVI A, D8
             0x3e => {
                 self.a = self.memory[self.pc + 1];
-                2
+                (2, 7)
             }
             // CMC
             0x3f => {
                 self.flags.carry = !self.flags.carry;
-                1
+                (1, 4)
             }
             // MOV D,M
             0x56 => {
                 self.d = self.memory[self.hl() as usize];
-                1
+                (1, 7)
             }
             // MOV E,M
             0x5e => {
                 self.e = self.memory[self.hl() as usize];
-                1
+                (1, 7)
             }
             // MOV H,M
             0x66 => {
                 self.h = self.memory[self.hl() as usize];
-                1
+                (1, 7)
             }
             // MOV L,A
             0x6f => {
                 self.l = self.a;
-                1
+                (1, 5)
             }
             // MOV M,A
             0x77 => {
                 self.memory[self.hl() as usize] = self.a;
-                1
+                (1, 7)
             }
             // MOV A,D
             0x7a => {
                 self.a = self.d;
-                1
+                (1, 5)
             }
             // MOV A,E
             0x7b => {
                 self.a = self.e;
-                1
+                (1, 5)
             }
             // MOV A,H
             0x7c => {
                 self.a = self.h;
-                1
+                (1, 5)
             }
             // MOV A,M
             0x7e => {
                 self.a = self.memory[self.hl() as usize];
-                1
+                (1, 7)
             }
             // HLT
             0x76 => {
@@ -413,250 +423,250 @@ impl State8080 {
             // ADD B
             0x80 => {
                 self.add(self.b);
-                1
+                (1, 4)
             }
             // ADD C
             0x81 => {
                 self.add(self.c);
-                1
+                (1, 4)
             }
             // ADD D
             0x82 => {
                 self.add(self.d);
-                1
+                (1, 4)
             }
             // ADD E
             0x83 => {
                 self.add(self.e);
-                1
+                (1, 4)
             }
             // ADD H
             0x84 => {
                 self.add(self.h);
-                1
+                (1, 4)
             }
             // ADD L
             0x85 => {
                 self.add(self.l);
-                1
+                (1, 4)
             }
             // ADD M
             0x86 => {
                 self.add(self.memory[self.hl() as usize]);
-                1
+                (1, 7)
             }
             // ADD A
             0x87 => {
                 self.add(self.a);
-                1
+                (1, 4)
             }
             // ANA B
             0xa0 => {
                 self.and(self.b);
-                1
+                (1, 4)
             }
             // ANA C
             0xa1 => {
                 self.and(self.c);
-                1
+                (1, 4)
             }
             // ANA D
             0xa2 => {
                 self.and(self.d);
-                1
+                (1, 4)
             }
             // ANA E
             0xa3 => {
                 self.and(self.e);
-                1
+                (1, 4)
             }
             // ANA H
             0xa4 => {
                 self.and(self.h);
-                1
+                (1, 4)
             }
             // ANA L
             0xa5 => {
                 self.and(self.l);
-                1
+                (1, 4)
             }
             // ANA M
             0xa6 => {
                 self.and(self.memory[self.hl() as usize]);
-                1
+                (1, 7)
             }
             // ANA A
             0xa7 => {
                 self.and(self.a);
-                1
+                (1, 4)
             }
             // XRA B
             0xa8 => {
                 self.xor(self.b);
-                1
+                (1, 4)
             }
             // XRA C
             0xa9 => {
                 self.xor(self.c);
-                1
+                (1, 4)
             }
             // XRA D
             0xaa => {
                 self.xor(self.d);
-                1
+                (1, 4)
             }
             // XRA E
             0xab => {
                 self.xor(self.e);
-                1
+                (1, 4)
             }
             // XRA H
             0xac => {
                 self.xor(self.h);
-                1
+                (1, 4)
             }
             // XRA L
             0xad => {
                 self.xor(self.l);
-                1
+                (1, 4)
             }
             // XRA M
             0xae => {
                 self.xor(self.memory[self.hl() as usize]);
-                1
+                (1, 7)
             }
             // XRA A
             0xaf => {
                 self.xor(self.a);
-                1
+                (1, 4)
             }
             // ORA B
             0xb0 => {
                 self.or(self.b);
-                1
+                (1, 4)
             }
             // ORA C
             0xb1 => {
                 self.or(self.c);
-                1
+                (1, 4)
             }
             // ORA D
             0xb2 => {
                 self.or(self.d);
-                1
+                (1, 4)
             }
             // ORA E
             0xb3 => {
                 self.or(self.e);
-                1
+                (1, 4)
             }
             // ORA H
             0xb4 => {
                 self.or(self.h);
-                1
+                (1, 4)
             }
             // ORA L
             0xb5 => {
                 self.or(self.l);
-                1
+                (1, 4)
             }
             // ORA M
             0xb6 => {
                 self.or(self.memory[self.hl() as usize]);
-                1
+                (1, 7)
             }
             // ORA A
             0xb7 => {
                 self.or(self.a);
-                1
+                (1, 4)
             }
             // CMP B
             0xb8 => {
                 self.cmp(self.b);
-                1
+                (1, 4)
             }
             // CMP C
             0xb9 => {
                 self.cmp(self.c);
-                1
+                (1, 4)
             }
             // CMP D
             0xba => {
                 self.cmp(self.d);
-                1
+                (1, 4)
             }
             // CMP E
             0xbb => {
                 self.cmp(self.e);
-                1
+                (1, 4)
             }
             // CMP H
             0xbc => {
                 self.cmp(self.h);
-                1
+                (1, 4)
             }
             // CMP L
             0xbd => {
                 self.cmp(self.l);
-                1
+                (1, 4)
             }
             // CMP M
             0xbe => {
                 self.cmp(self.memory[self.hl() as usize]);
-                1
+                (1, 7)
             }
             // CMP A
             0xbf => {
                 self.cmp(self.a);
-                1
+                (1, 4)
             }
             // POP B
             0xc1 => {
                 self.b = self.memory[self.sp + 1];
                 self.c = self.memory[self.sp];
                 self.sp += 2;
-                1
+                (1, 10)
             }
             // PUSH B
             0xc5 => {
                 self.memory[self.sp - 1] = self.b;
                 self.memory[self.sp - 2] = self.c;
                 self.sp -= 2;
-                1
+                (1, 11)
             }
             // JNZ adr
             0xc2 => {
                 if !self.flags.zero {
                     self.jmp();
-                    0
+                    (0, 10)
                 } else {
-                    3
+                    (3, 10)
                 }
             }
             // JMP adr
             0xc3 => {
                 self.jmp();
-                0
+                (0, 10)
             }
             // ADI D8
             0xc6 => {
                 self.add(self.memory[self.pc + 1]);
-                2
+                (2, 7)
             }
             // RET
             0xc9 => {
                 self.pc =
                     self.memory[self.sp] as usize | ((self.memory[self.sp + 1] as usize) << 8);
                 self.sp += 2;
-                1
+                (0, 10)
             }
             // JZ adr
             0xca => {
                 if self.flags.zero {
                     self.jmp();
-                    0
+                    (0, 10)
                 } else {
-                    3
+                    (3, 10)
                 }
             }
             // CALL adr
@@ -666,64 +676,64 @@ impl State8080 {
                 self.memory[self.sp - 2] = ret as u8;
                 self.sp -= 2;
                 self.pc = self.address() as usize;
-                0
+                (0, 17)
             }
             // POP D
             0xd1 => {
                 self.d = self.memory[self.sp + 1];
                 self.e = self.memory[self.sp];
                 self.sp += 2;
-                1
+                (1, 10)
             }
             // JNC adr
             0xd2 => {
                 if !self.flags.carry {
                     self.jmp();
-                    0
+                    (0, 10)
                 } else {
-                    3
+                    (3, 10)
                 }
             }
             // OUT D8
             0xd3 => {
                 //TODO
-                2
+                (2, 10)
             }
             // PUSH D
             0xd5 => {
                 self.memory[self.sp - 1] = self.d;
                 self.memory[self.sp - 2] = self.e;
                 self.sp -= 2;
-                1
+                (1, 11)
             }
             // JC adr
             0xda => {
                 if self.flags.carry {
                     self.jmp();
-                    0
+                    (0, 10)
                 } else {
-                    3
+                    (3, 10)
                 }
             }
             // IN D8
             0xdb => {
                 //TODO
-                2
+                (2, 10)
             }
             // POP H
             0xe1 => {
                 self.h = self.memory[self.sp + 1];
                 self.l = self.memory[self.sp];
                 self.sp += 2;
-                1
+                (1, 10)
             }
             // JPO adr
             0xe2 => {
                 if !self.flags.even_parity {
                     self.jmp();
-                    0
+                    (0, 10)
                 } else {
-                    3
+                    (3, 10)
                 }
             }
             // PUSH H
@@ -731,20 +741,20 @@ impl State8080 {
                 self.memory[self.sp - 1] = self.h;
                 self.memory[self.sp - 2] = self.l;
                 self.sp -= 2;
-                1
+                (1, 11)
             }
             // ANI D8
             0xe6 => {
                 self.and(self.memory[self.pc + 1]);
-                2
+                (2, 7)
             }
             // JPE adr
             0xea => {
                 if self.flags.even_parity {
                     self.jmp();
-                    0
+                    (0, 10)
                 } else {
-                    3
+                    (3, 10)
                 }
             }
             // XCHG
@@ -755,54 +765,54 @@ impl State8080 {
                 self.e = self.l;
                 self.h = d;
                 self.l = e;
-                1
+                (1, 5)
             }
             // POP PSW
             0xf1 => {
                 self.a = self.memory[self.sp + 1];
                 self.flags.set_psw(self.memory[self.sp]);
                 self.sp += 2;
-                1
+                (1, 10)
             }
             // JP adr
             0xf2 => {
                 if !self.flags.sign_negative {
                     self.jmp();
-                    0
+                    (0, 10)
                 } else {
-                    3
+                    (3, 10)
                 }
             }
             // DI
             0xf3 => {
                 self.interrupts_enabled = false;
-                1
+                (1, 4)
             }
             // PUSH PSW
             0xf5 => {
                 self.memory[self.sp - 1] = self.a;
                 self.memory[self.sp - 2] = self.flags.psw();
                 self.sp -= 2;
-                1
+                (1, 11)
             }
             // JM adr
             0xfa => {
                 if self.flags.sign_negative {
                     self.jmp();
-                    0
+                    (0, 10)
                 } else {
-                    3
+                    (3, 10)
                 }
             }
             // EI
             0xfb => {
                 self.interrupts_enabled = true;
-                1
+                (1, 4)
             }
             // CPI D8
             0xfe => {
                 self.cmp(self.memory[self.pc + 1]);
-                2
+                (2, 7)
             }
             // Unimplemented
             _ => {
@@ -810,6 +820,9 @@ impl State8080 {
                 process::exit(0)
             }
         };
+
+        self.pc += pc_incr;
+        cycles
     }
 
     /// Jumps the PC, using the two bytes following the current PC
