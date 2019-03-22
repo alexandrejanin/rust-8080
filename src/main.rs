@@ -46,6 +46,7 @@ fn main() {
             // Display state information
             for line in &[
                 format!("cycle: {}", cycles),
+                format!("seconds: {}", cycles / 2_000_000),
                 state.next_opcode(),
                 format!("AF: {:04x}", state.af()),
                 format!("BC: {:04x}", state.bc()),
@@ -61,8 +62,7 @@ fn main() {
                     &mut glyphs,
                     c.transform.trans(x, y),
                     g,
-                )
-                    .unwrap();
+                ).unwrap();
                 y += 15.0;
             }
         });
