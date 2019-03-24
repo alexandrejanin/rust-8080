@@ -1,10 +1,11 @@
+use crate::machine::IOState;
 use std::{fmt, process};
 
 #[derive(Clone, Copy)]
 #[repr(C)]
-union RegisterPair {
-    both: u16,
-    one: (u8, u8),
+pub union RegisterPair {
+    pub both: u16,
+    pub one: (u8, u8),
 }
 
 #[derive(Debug)]
@@ -60,14 +61,23 @@ pub struct State8080 {
     memory: [u8; 16384],
     flags: Flags,
     interrupts_enabled: bool,
-    cycle_debt: u128
+    cycle_debt: u64,
 }
 
 impl fmt::Display for State8080 {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(
             f,
-            "AF:{:04x}\nBC:{:04x}\nDE:{:04x}\nHL:{:04x}\nsp:{:04x}\npc:{:04x}\nflags:{:?}",
+            "{}\nA:{:02x}\nB:{:02x}\nC:{:02x}\nD:{:02x}\nE:{:02x}\nH:{:02x}\nL:{:02x}\n\
+            AF:{:04x}\nBC:{:04x}\nDE:{:04x}\nHL:{:04x}\nsp:{:04x}\npc:{:04x}\nflags:{:?}",
+            self.next_opcode(),
+            self.a,
+            self.b(),
+            self.c(),
+            self.d(),
+            self.e(),
+            self.h(),
+            self.l(),
             self.af(),
             self.bc(),
             self.de(),
@@ -81,6 +91,31 @@ impl fmt::Display for State8080 {
 
 impl State8080 {
     // Public
+
+    pub fn new(rom: &[u8]) -> Self {
+        // Initialize ram and copy rom
+        let mut memory = [0; 16384];
+        memory[..rom.len()].clone_from_slice(rom);
+
+        Self {
+            a: 0,
+            bc: RegisterPair { both: 0 },
+            de: RegisterPair { both: 0 },
+            hl: RegisterPair { both: 0 },
+            sp: 0,
+            pc: 0,
+            memory,
+            flags: Flags {
+                zero: false,
+                sign_negative: false,
+                even_parity: false,
+                carry: false,
+                aux_carry: false,
+            },
+            interrupts_enabled: true,
+            cycle_debt: 0,
+        }
+    }
 
     pub fn af(&self) -> u16 {
         (u16::from(self.a) << 8) | u16::from(self.flags.psw())
@@ -110,74 +145,113 @@ impl State8080 {
         self.op_name(self.pc)
     }
 
+    pub fn memory(&self) -> &[u8] {
+        &self.memory
+    }
+
+    pub fn interrupt(&mut self, interrupt_num: u16) {
+        if self.interrupts_enabled && self.pc > 0 {
+            self.push(self.pc);
+            self.pc = 8 * interrupt_num;
+        }
+    }
+
+    /// Steps the emulator `dt` seconds.
+    /// Returns the number of cycles that were executed.
+    pub fn step(&mut self, dt: f64, io_state: &mut IOState) -> u64 {
+        // Simulates 2 MHz
+        let freq = 2_000_000.0;
+        let step_cycles = (freq * dt) as u64 - self.cycle_debt;
+
+        // Cycle debt represents how many extra cycles we ran last time, so we run that many less this time
+        let mut spent_cycles = 0;
+
+        while spent_cycles < step_cycles {
+            spent_cycles += self.emulate(io_state);
+        }
+
+        self.cycle_debt = spent_cycles - step_cycles;
+
+        spent_cycles
+    }
+
     // Private
 
-    pub fn set_af(&mut self, value: u16) {
+    fn set_af(&mut self, value: u16) {
         self.flags.set_psw(value as u8);
         self.a = (value >> 8) as u8;
+    }
+
+    pub fn a(&self) -> u8 {
+        self.a
     }
 
     fn bc_mut(&mut self) -> &mut u16 {
         unsafe { &mut self.bc.both }
     }
 
-    fn b(&self) -> u8 {
-        unsafe { self.bc.one.0 }
-    }
-
-    fn b_mut(&mut self) -> &mut u8 {
-        unsafe { &mut self.bc.one.0 }
-    }
-
-    fn c(&self) -> u8 {
+    pub fn b(&self) -> u8 {
         unsafe { self.bc.one.1 }
     }
 
-    fn c_mut(&mut self) -> &mut u8 {
+    fn b_mut(&mut self) -> &mut u8 {
         unsafe { &mut self.bc.one.1 }
+    }
+
+    pub fn c(&self) -> u8 {
+        unsafe { self.bc.one.0 }
+    }
+
+    fn c_mut(&mut self) -> &mut u8 {
+        unsafe { &mut self.bc.one.0 }
     }
 
     fn de_mut(&mut self) -> &mut u16 {
         unsafe { &mut self.de.both }
     }
-    fn d(&self) -> u8 {
-        unsafe { self.de.one.0 }
-    }
 
-    fn d_mut(&mut self) -> &mut u8 {
-        unsafe { &mut self.de.one.0 }
-    }
-
-    fn e(&self) -> u8 {
+    pub fn d(&self) -> u8 {
         unsafe { self.de.one.1 }
     }
 
-    fn e_mut(&mut self) -> &mut u8 {
+    fn d_mut(&mut self) -> &mut u8 {
         unsafe { &mut self.de.one.1 }
+    }
+
+    pub fn e(&self) -> u8 {
+        unsafe { self.de.one.0 }
+    }
+
+    fn e_mut(&mut self) -> &mut u8 {
+        unsafe { &mut self.de.one.0 }
     }
 
     fn hl_mut(&mut self) -> &mut u16 {
         unsafe { &mut self.hl.both }
     }
 
-    fn h(&self) -> u8 {
-        unsafe { self.hl.one.0 }
-    }
-
-    fn h_mut(&mut self) -> &mut u8 {
-        unsafe { &mut self.hl.one.0 }
-    }
-
-    fn l(&self) -> u8 {
+    pub fn h(&self) -> u8 {
         unsafe { self.hl.one.1 }
     }
 
-    fn l_mut(&mut self) -> &mut u8 {
+    fn h_mut(&mut self) -> &mut u8 {
         unsafe { &mut self.hl.one.1 }
     }
 
-    fn m(&self) -> u8 {
+    pub fn l(&self) -> u8 {
+        unsafe { self.hl.one.0 }
+    }
+
+    fn l_mut(&mut self) -> &mut u8 {
+        unsafe { &mut self.hl.one.0 }
+    }
+
+    pub fn m(&self) -> u8 {
         self.read_byte(self.hl())
+    }
+
+    fn m_mut(&mut self) -> &mut u8 {
+        &mut self.memory[self.hl() as usize]
     }
 
     /// Reads the byte at the specified address
@@ -205,61 +279,156 @@ impl State8080 {
     }
 
     fn write_bytes(&mut self, address: u16, value: u16) {
-        let big = (value >> 8) as u8;
-        let little = value as u8;
-        self.memory[address as usize] = little;
-        self.memory[address as usize + 1] = big;
+        self.write_byte(address, value as u8);
+        self.write_byte(address + 1, (value >> 8) as u8);
     }
 
-    pub fn new(rom: &[u8]) -> Self {
-        let mut memory = [0; 16384];
-        for (i, &b) in rom.iter().enumerate() {
-            memory[i] = b;
-        }
-
-        Self {
-            a: 0,
-            bc: RegisterPair { both: 0 },
-            de: RegisterPair { both: 0 },
-            hl: RegisterPair { both: 0 },
-            sp: 0,
-            pc: 0,
-            memory,
-            flags: Flags {
-                zero: false,
-                sign_negative: false,
-                even_parity: false,
-                carry: false,
-                aux_carry: false,
-            },
-            interrupts_enabled: true,
-            cycle_debt: 0
-        }
+    fn jmp(&mut self) {
+        self.pc = self.read_bytes_immediate();
     }
 
-    /// Steps the emulator `nanos` nanoseconds.
-    /// Returns the number of cycles that were executed.
-    pub fn step(&mut self, nanos: u128) -> u128 {
-        // Simulates 2 MHz
-        let freq = 2_000_000;
-        let step_cycles = (freq * nanos) / 1_000_000_000;
+    fn ret(&mut self) {
+        self.pc = self.pop();
+    }
 
-        // Cycle debt represents how many extra cycles we ran last time, so we run that many less this time
-        let mut spent_cycles = self.cycle_debt;
+    fn pop(&mut self) -> u16 {
+        let value = self.read_bytes(self.sp);
+        self.sp += 2;
+        value
+    }
 
-        while spent_cycles < step_cycles {
-            spent_cycles += u128::from(self.emulate());
+    fn push(&mut self, value: u16) {
+        self.write_bytes(self.sp - 2, value);
+        self.sp -= 2;
+    }
+
+    /// Sets flags using `value` as the result of the last operation
+    fn set_flags(&mut self, value: u8) {
+        // true when result is zero
+        self.flags.zero = value == 0;
+
+        // true when result is negative (sign bit is set)
+        self.flags.sign_negative = (value & (1 << 7)) != 0;
+
+        // true when instruction resulted in a carry out
+        self.flags.carry = false;
+
+        // true when the result is even
+        self.flags.even_parity = Self::parity(value);
+    }
+
+    /// Adds `operand` to the A register, setting flags appropriately
+    fn add(&mut self, operand: u8) {
+        let result: u16 = u16::from(self.a) + u16::from(operand);
+
+        // true when result is zero
+        self.flags.zero = result.trailing_zeros() >= 8;
+
+        // true when result is negative (sign bit is set)
+        self.flags.sign_negative = (result & (1 << 7)) != 0;
+
+        // true when instruction resulted in a carry out
+        self.flags.carry = result > 0xff;
+
+        // true when the result is even
+        self.flags.even_parity = Self::parity((result & 0xff) as u8);
+
+        self.a = result as u8;
+    }
+
+    /// Bitwise AND between the A register and `operand`
+    fn and(&mut self, operand: u8) {
+        let result: u8 = self.a & operand;
+
+        // true when result is zero
+        self.flags.zero = result == 0;
+
+        // true when result is negative (sign bit is set)
+        self.flags.sign_negative = (result & (1 << 7)) != 0;
+
+        // true when instruction resulted in a carry out
+        self.flags.carry = false;
+
+        // true when the result is even
+        self.flags.even_parity = Self::parity(result);
+
+        self.a = result;
+    }
+
+    /// Bitwise OR between the A register and `operand`
+    fn or(&mut self, operand: u8) {
+        let result: u8 = self.a | operand;
+
+        // true when result is zero
+        self.flags.zero = result == 0;
+
+        // true when result is negative (sign bit is set)
+        self.flags.sign_negative = (result & (1 << 7)) != 0;
+
+        // true when instruction resulted in a carry out
+        self.flags.carry = false;
+
+        // true when the result is even
+        self.flags.even_parity = Self::parity(result);
+
+        self.a = result;
+    }
+
+    /// Bitwise XOR between the A register and `operand`
+    fn xor(&mut self, operand: u8) {
+        let result: u8 = self.a ^ operand;
+
+        // true when result is zero
+        self.flags.zero = result == 0;
+
+        // true when result is negative (sign bit is set)
+        self.flags.sign_negative = (result & (1 << 7)) != 0;
+
+        // true when instruction resulted in a carry out
+        self.flags.carry = false;
+
+        // true when the result is even
+        self.flags.even_parity = Self::parity(result);
+
+        self.a = result;
+    }
+
+    fn cmp(&mut self, operand: u8) {
+        let result: u8 = self.a.wrapping_sub(operand);
+
+        // true when result is zero
+        self.flags.zero = result == 0;
+
+        // true when result is negative (sign bit is set)
+        self.flags.sign_negative = (result & (1 << 7)) != 0;
+
+        // true when instruction resulted in a carry out
+        self.flags.carry = self.a < operand;
+
+        // true when the result is even
+        self.flags.even_parity = Self::parity(result);
+    }
+
+    /// Returns true if the byte has an even number of 1s
+    fn parity(mut x: u8) -> bool {
+        let mut parity = 0u8;
+        while x != 0 {
+            parity ^= x & 1;
+            x >>= 1;
         }
 
-        self.cycle_debt = spent_cycles - step_cycles;
-
-        spent_cycles
+        parity != 0
     }
 
     /// Executes the next instruction.
     /// Advances PC apporpriately, and returns the number of cycles taken.
-    fn emulate(&mut self) -> u32 {
+    fn emulate(&mut self, io_state: &mut IOState) -> u64 {
         let op_code = self.read_byte(self.pc);
+
+        println!(
+            "{:04x}:\t{:02x}\t{}\na={:02x} b={:02x} c={:02x} d={:02x} e={:02x} h={:02x} l={:02x}\n",
+            self.pc, self.read_byte(self.pc), self.next_opcode(), self.a, self.b(), self.c(), self.d(), self.e(), self.h(), self.l(),
+        );
 
         let (pc_incr, cycles) = match op_code {
             // NOP
@@ -281,13 +450,13 @@ impl State8080 {
             }
             // INR B
             0x04 => {
-                self.b_mut().wrapping_add(1);
+                *self.b_mut() = self.b().wrapping_add(1);
                 self.set_flags(self.b());
                 (1, 5)
             }
             // DCR B
             0x05 => {
-                self.b_mut().wrapping_sub(1);
+                *self.b_mut() = self.b().wrapping_sub(1);
                 self.set_flags(self.b());
                 (1, 5)
             }
@@ -369,7 +538,7 @@ impl State8080 {
             }
             // LDAX D
             0x1a => {
-                self.a = self.memory[self.de() as usize];
+                self.a = self.read_byte(self.de());
                 (1, 7)
             }
             // MVI E, D8
@@ -428,9 +597,14 @@ impl State8080 {
                 self.write_byte(self.read_bytes_immediate(), self.a);
                 (3, 13)
             }
+            // DCR M
+            0x35 => {
+                self.m_mut().wrapping_sub(1);
+                (1, 10)
+            }
             // MVI M, D8
             0x36 => {
-                self.write_byte(self.hl(), self.read_byte_immediate());
+                *self.m_mut() = self.read_byte_immediate();
                 (2, 10)
             }
             // STC
@@ -475,7 +649,7 @@ impl State8080 {
             }
             // MOV M,A
             0x77 => {
-                self.write_byte(self.hl(), self.a);
+                *self.m_mut() = self.a;
                 (1, 7)
             }
             // MOV A,D
@@ -732,9 +906,18 @@ impl State8080 {
                 self.add(self.read_byte_immediate());
                 (2, 7)
             }
+            // RZ
+            0xc8 => {
+                if self.flags.zero {
+                    self.ret();
+                    (0, 11)
+                } else {
+                    (0, 5)
+                }
+            }
             // RET
             0xc9 => {
-                self.pc = self.pop();
+                self.ret();
                 (0, 10)
             }
             // JZ adr
@@ -768,7 +951,7 @@ impl State8080 {
             }
             // OUT D8
             0xd3 => {
-                //TODO
+                io_state.output(self.read_byte_immediate(), self.a);
                 (2, 10)
             }
             // PUSH D
@@ -787,7 +970,7 @@ impl State8080 {
             }
             // IN D8
             0xdb => {
-                //TODO
+                self.a = io_state.input(self.read_byte_immediate());
                 (2, 10)
             }
             // POP H
@@ -830,7 +1013,7 @@ impl State8080 {
                 *self.hl_mut() = tmp;
                 (1, 5)
             }
-            // POP PSW
+            // POP AF
             0xf1 => {
                 let pop = self.pop();
                 self.set_af(pop);
@@ -850,7 +1033,7 @@ impl State8080 {
                 self.interrupts_enabled = false;
                 (1, 4)
             }
-            // PUSH PSW
+            // PUSH AF
             0xf5 => {
                 self.push(self.af());
                 (1, 11)
@@ -883,139 +1066,6 @@ impl State8080 {
 
         self.pc += pc_incr;
         cycles
-    }
-
-    /// Jumps the PC, using the two bytes following the current PC
-    fn jmp(&mut self) {
-        self.pc = self.read_bytes_immediate();
-    }
-
-    fn pop(&mut self) -> u16 {
-        let value = self.read_bytes(self.sp);
-        self.sp += 2;
-        value
-    }
-
-    fn push(&mut self, value: u16) {
-        self.write_bytes(self.sp - 2, value);
-        self.sp -= 2;
-    }
-
-    fn set_flags(&mut self, value: u8) {
-        // true when result is zero
-        self.flags.zero = value == 0;
-
-        // true when result is negative (sign bit is set)
-        self.flags.sign_negative = (value & (1 << 7)) != 0;
-
-        // true when instruction resulted in a carry out
-        self.flags.carry = false;
-
-        // true when the result is even
-        self.flags.even_parity = Self::parity(value);
-    }
-
-    /// Adds `operand` to the A register, setting flags appropriately
-    fn add(&mut self, operand: u8) {
-        let result: u16 = u16::from(self.a) + u16::from(operand);
-
-        // true when result is zero
-        self.flags.zero = result.trailing_zeros() >= 8;
-
-        // true when result is negative (sign bit is set)
-        self.flags.sign_negative = (result & (1 << 7)) != 0;
-
-        // true when instruction resulted in a carry out
-        self.flags.carry = result > 0xff;
-
-        // true when the result is even
-        self.flags.even_parity = Self::parity((result & 0xff) as u8);
-
-        self.a = result as u8;
-    }
-
-    /// Bitwise AND between the A register and `operand`
-    fn and(&mut self, operand: u8) {
-        let result: u8 = self.a & operand;
-
-        // true when result is zero
-        self.flags.zero = result == 0;
-
-        // true when result is negative (sign bit is set)
-        self.flags.sign_negative = (result & (1 << 7)) != 0;
-
-        // true when instruction resulted in a carry out
-        self.flags.carry = false;
-
-        // true when the result is even
-        self.flags.even_parity = Self::parity(result);
-
-        self.a = result;
-    }
-
-    /// Bitwise OR between the A register and `operand`
-    fn or(&mut self, operand: u8) {
-        let result: u8 = self.a | operand;
-
-        // true when result is zero
-        self.flags.zero = result == 0;
-
-        // true when result is negative (sign bit is set)
-        self.flags.sign_negative = (result & (1 << 7)) != 0;
-
-        // true when instruction resulted in a carry out
-        self.flags.carry = false;
-
-        // true when the result is even
-        self.flags.even_parity = Self::parity(result);
-
-        self.a = result;
-    }
-
-    /// Bitwise XOR between the A register and `operand`
-    fn xor(&mut self, operand: u8) {
-        let result: u8 = self.a ^ operand;
-
-        // true when result is zero
-        self.flags.zero = result == 0;
-
-        // true when result is negative (sign bit is set)
-        self.flags.sign_negative = (result & (1 << 7)) != 0;
-
-        // true when instruction resulted in a carry out
-        self.flags.carry = false;
-
-        // true when the result is even
-        self.flags.even_parity = Self::parity(result);
-
-        self.a = result;
-    }
-
-    fn cmp(&mut self, operand: u8) {
-        let result: u8 = self.a.wrapping_sub(operand);
-
-        // true when result is zero
-        self.flags.zero = result == 0;
-
-        // true when result is negative (sign bit is set)
-        self.flags.sign_negative = (result & (1 << 7)) != 0;
-
-        // true when instruction resulted in a carry out
-        self.flags.carry = self.a < operand;
-
-        // true when the result is even
-        self.flags.even_parity = Self::parity(result);
-    }
-
-    /// Returns true if the byte has an even number of 1s
-    fn parity(mut x: u8) -> bool {
-        let mut parity = 0u8;
-        while x != 0 {
-            parity ^= x & 1;
-            x >>= 1;
-        }
-
-        parity != 0
     }
 
     /// Returns the name of the instruction at the specified address in memory
@@ -1248,8 +1298,8 @@ impl State8080 {
             0xec => format!("CPE ${:04x}", self.read_bytes(address + 1)),
             0xee => "XRI D8".into(),
             0xf0 => "RP".into(),
-            0xf1 => "POP PSW".into(),
-            0xf5 => "PUSH PSW".into(),
+            0xf1 => "POP AF".into(),
+            0xf5 => "PUSH AF".into(),
             0xf6 => "ORI D8".into(),
             0xf7 => "RST 6".into(),
             0xf8 => "RM".into(),
