@@ -112,7 +112,7 @@ impl State8080 {
                 carry: false,
                 aux_carry: false,
             },
-            interrupts_enabled: true,
+            interrupts_enabled: false,
             cycle_debt: 0,
         }
     }
@@ -150,9 +150,10 @@ impl State8080 {
     }
 
     pub fn interrupt(&mut self, interrupt_num: u16) {
-        if self.interrupts_enabled && self.pc > 0 {
+        if self.interrupts_enabled {
             self.push(self.pc);
             self.pc = 8 * interrupt_num;
+            self.interrupts_enabled = false;
         }
     }
 
@@ -284,6 +285,11 @@ impl State8080 {
     }
 
     fn jmp(&mut self) {
+        self.pc = self.read_bytes_immediate();
+    }
+
+    fn call(&mut self) {
+        self.push(self.pc + 3);
         self.pc = self.read_bytes_immediate();
     }
 
@@ -931,8 +937,7 @@ impl State8080 {
             }
             // CALL adr
             0xcd => {
-                self.push(self.pc + 2);
-                self.pc = self.read_bytes_immediate();
+                self.call();
                 (0, 17)
             }
             // POP D
@@ -1267,7 +1272,7 @@ impl State8080 {
             0xc3 => format!("JMP ${:04x}", self.read_bytes(address + 1)),
             0xc4 => format!("CNZ ${:04x}", self.read_bytes(address + 1)),
             0xc5 => "PUSH B".into(),
-            0xc6 => "ADI D8".into(),
+            0xc6 => format!("ADI ${:02x}", self.read_byte(address + 1)),
             0xc8 => "RZ".into(),
             0xca => format!("JZ ${:04x}", self.read_bytes(address + 1)),
             0xcc => format!("CZ ${:04x}", self.read_bytes(address + 1)),
@@ -1276,13 +1281,13 @@ impl State8080 {
             0xd0 => "RNC".into(),
             0xd1 => "POP D".into(),
             0xd2 => format!("JNC ${:04x}", self.read_bytes(address + 1)),
-            0xd3 => "OUT D8".into(),
+            0xd3 => format!("OUT ${:02x}", self.read_byte(address + 1)),
             0xd4 => format!("CNC ${:04x}", self.read_bytes(address + 1)),
             0xd5 => "PUSH D".into(),
-            0xd6 => "SUI D8".into(),
+            0xd6 => format!("SUI ${:02x}", self.read_byte(address + 1)),
             0xd8 => "RC".into(),
             0xda => format!("JC ${:04x}", self.read_bytes(address + 1)),
-            0xdb => "IN D8".into(),
+            0xdb => format!("IN ${:02x}", self.read_byte(address + 1)),
             0xdc => format!("CC ${:04x}", self.read_bytes(address + 1)),
             0xdd => "NOP".into(),
             0xde => "SBI D8".into(),
@@ -1292,21 +1297,21 @@ impl State8080 {
             0xe3 => "XTHL".into(),
             0xe4 => format!("CPO ${:04x}", self.read_bytes(address + 1)),
             0xe5 => "PUSH H".into(),
-            0xe6 => "ANI D8".into(),
+            0xe6 => format!("ANI ${:02x}", self.read_byte(address + 1)),
             0xe9 => "PCHL".into(),
             0xeb => "XCHG".into(),
             0xec => format!("CPE ${:04x}", self.read_bytes(address + 1)),
-            0xee => "XRI D8".into(),
+            0xee => format!("XRI ${:02x}", self.read_byte(address + 1)),
             0xf0 => "RP".into(),
             0xf1 => "POP AF".into(),
             0xf5 => "PUSH AF".into(),
-            0xf6 => "ORI D8".into(),
+            0xf6 => format!("ORI ${:02x}", self.read_byte(address + 1)),
             0xf7 => "RST 6".into(),
             0xf8 => "RM".into(),
             0xfa => format!("JM ${:04x}", self.read_bytes(address + 1)),
             0xfb => "EI".into(),
             0xfc => format!("CM ${:04x}", self.read_bytes(address + 1)),
-            0xfe => "CPI D8".into(),
+            0xfe => format!("CPI ${:02x}", self.read_byte(address + 1)),
             0xff => "RST 7".into(),
             _ => format!("Unknown opcode: {:02x}", self.read_byte(address)),
         }
