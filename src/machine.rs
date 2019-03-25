@@ -97,8 +97,6 @@ impl Machine for SpaceInvaders {
             format!("Cycles: {}", self.cycles),
             format!("Seconds: {}", self.cycles / 2_000_000),
             self.state.next_opcode(),
-            format!("A: {:02x} B: {:02x} C: {:02x} D: {:02x}", self.state.a(), self.state.b(), self.state.c(), self.state.d()),
-            format!("E: {:02x} H: {:02x} L: {:02x}", self.state.e(), self.state.h(), self.state.l()),
             format!("AF: {:04x} BC: {:04x}", self.state.af(), self.state.bc()),
             format!("DE: {:04x} HL: {:04x}", self.state.de(), self.state.hl()),
             format!("PC: {:04x} SP: {:04x}", self.state.pc(), self.state.sp()),
@@ -116,7 +114,7 @@ pub struct SpaceInvadersIO {
 impl SpaceInvadersIO {
     fn new() -> Self {
         Self {
-            shift_register: RegisterPair { both: 0 },
+            shift_register: RegisterPair::new(),
             shift_amount: 0,
             port1: 0b10010000,
             port2: 0b00100000,
@@ -154,7 +152,7 @@ impl IOState for SpaceInvadersIO {
         match port {
             1 => self.port1,
             2 => self.port2,
-            3 => (unsafe { self.shift_register.both } >> (8 - self.shift_amount)) as u8,
+            3 => (self.shift_register.both() >> (8 - self.shift_amount)) as u8,
             _ => panic!("Cannot read port: {}", port),
         }
     }
@@ -162,9 +160,9 @@ impl IOState for SpaceInvadersIO {
     fn output(&mut self, port: u8, value: u8) {
         match port {
             2 => self.shift_amount = value & 0b111,
-            4 => unsafe {
-                self.shift_register.one.0 = self.shift_register.one.1;
-                self.shift_register.one.1 = value;
+            4 => {
+                *self.shift_register.lsb_mut() = self.shift_register.msb();
+                *self.shift_register.msb_mut() = value;
             },
             _ => {}
         }

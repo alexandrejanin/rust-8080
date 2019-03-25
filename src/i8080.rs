@@ -4,8 +4,44 @@ use std::{fmt, process};
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub union RegisterPair {
-    pub both: u16,
-    pub one: (u8, u8),
+    both: u16,
+    one: (u8, u8),
+}
+
+impl RegisterPair {
+    pub fn new() -> Self {
+        Self {
+            both: 0
+        }
+    }
+
+    pub fn both(&self) -> u16 {
+        unsafe { self.both }
+    }
+
+    pub fn both_mut(&mut self) -> &mut u16 {
+        unsafe { &mut self.both }
+    }
+
+    /// Least significant byte
+    pub fn lsb(&self) -> u8 {
+        unsafe { self.one.0 }
+    }
+
+    /// Least significant byte
+    pub fn lsb_mut(&mut self) -> &mut u8 {
+        unsafe { &mut self.one.0 }
+    }
+
+    /// Most significant byte
+    pub fn msb(&self) -> u8 {
+        unsafe { self.one.1 }
+    }
+
+    /// Most significant byte
+    pub fn msb_mut(&mut self) -> &mut u8 {
+        unsafe { &mut self.one.1 }
+    }
 }
 
 #[derive(Debug)]
@@ -99,9 +135,9 @@ impl State8080 {
 
         Self {
             a: 0,
-            bc: RegisterPair { both: 0 },
-            de: RegisterPair { both: 0 },
-            hl: RegisterPair { both: 0 },
+            bc: RegisterPair::new(),
+            de: RegisterPair::new(),
+            hl: RegisterPair::new(),
             sp: 0,
             pc: 0,
             memory,
@@ -121,16 +157,48 @@ impl State8080 {
         (u16::from(self.a) << 8) | u16::from(self.flags.psw())
     }
 
+    pub fn a(&self) -> u8 {
+        self.a
+    }
+
     pub fn bc(&self) -> u16 {
-        unsafe { self.bc.both }
+        self.bc.both()
+    }
+
+    pub fn b(&self) -> u8 {
+        self.bc.msb()
+    }
+
+    pub fn c(&self) -> u8 {
+        self.bc.lsb()
     }
 
     pub fn de(&self) -> u16 {
-        unsafe { self.de.both }
+        self.de.both()
+    }
+
+    pub fn d(&self) -> u8 {
+        self.de.msb()
+    }
+
+    pub fn e(&self) -> u8 {
+        self.de.lsb()
     }
 
     pub fn hl(&self) -> u16 {
-        unsafe { self.hl.both }
+        self.hl.both()
+    }
+
+    pub fn h(&self) -> u8 {
+        self.hl.msb()
+    }
+
+    pub fn l(&self) -> u8 {
+        self.hl.lsb()
+    }
+
+    pub fn m(&self) -> u8 {
+        self.read_byte(self.hl())
     }
 
     pub fn pc(&self) -> u16 {
@@ -161,10 +229,11 @@ impl State8080 {
     /// Returns the number of cycles that were executed.
     pub fn step(&mut self, dt: f64, io_state: &mut IOState) -> u64 {
         // Simulates 2 MHz
-        let freq = 2_000_000.0;
-        let step_cycles = (freq * dt) as u64 - self.cycle_debt;
+        const FREQ: f64 = 2_000_000.0;
 
         // Cycle debt represents how many extra cycles we ran last time, so we run that many less this time
+        let step_cycles = (FREQ * dt) as u64 - self.cycle_debt;
+
         let mut spent_cycles = 0;
 
         while spent_cycles < step_cycles {
@@ -183,72 +252,40 @@ impl State8080 {
         self.a = (value >> 8) as u8;
     }
 
-    pub fn a(&self) -> u8 {
-        self.a
-    }
-
     fn bc_mut(&mut self) -> &mut u16 {
-        unsafe { &mut self.bc.both }
-    }
-
-    pub fn b(&self) -> u8 {
-        unsafe { self.bc.one.1 }
+        self.bc.both_mut()
     }
 
     fn b_mut(&mut self) -> &mut u8 {
-        unsafe { &mut self.bc.one.1 }
-    }
-
-    pub fn c(&self) -> u8 {
-        unsafe { self.bc.one.0 }
+        self.bc.msb_mut()
     }
 
     fn c_mut(&mut self) -> &mut u8 {
-        unsafe { &mut self.bc.one.0 }
+        self.bc.lsb_mut()
     }
 
     fn de_mut(&mut self) -> &mut u16 {
-        unsafe { &mut self.de.both }
-    }
-
-    pub fn d(&self) -> u8 {
-        unsafe { self.de.one.1 }
+        self.de.both_mut()
     }
 
     fn d_mut(&mut self) -> &mut u8 {
-        unsafe { &mut self.de.one.1 }
-    }
-
-    pub fn e(&self) -> u8 {
-        unsafe { self.de.one.0 }
+        self.de.msb_mut()
     }
 
     fn e_mut(&mut self) -> &mut u8 {
-        unsafe { &mut self.de.one.0 }
+        self.de.lsb_mut()
     }
 
     fn hl_mut(&mut self) -> &mut u16 {
-        unsafe { &mut self.hl.both }
-    }
-
-    pub fn h(&self) -> u8 {
-        unsafe { self.hl.one.1 }
+        self.hl.both_mut()
     }
 
     fn h_mut(&mut self) -> &mut u8 {
-        unsafe { &mut self.hl.one.1 }
-    }
-
-    pub fn l(&self) -> u8 {
-        unsafe { self.hl.one.0 }
+        self.hl.msb_mut()
     }
 
     fn l_mut(&mut self) -> &mut u8 {
-        unsafe { &mut self.hl.one.0 }
-    }
-
-    pub fn m(&self) -> u8 {
-        self.read_byte(self.hl())
+        self.hl.lsb_mut()
     }
 
     fn m_mut(&mut self) -> &mut u8 {
@@ -491,13 +528,13 @@ impl State8080 {
             }
             // INR C
             0x0c => {
-                self.c_mut().wrapping_add(1);
+                *self.c_mut() = self.c().wrapping_add(1);
                 self.set_flags(self.c());
                 (1, 5)
             }
             // DCR C
             0x0d => {
-                self.c_mut().wrapping_sub(1);
+                *self.c_mut() = self.c().wrapping_sub(1);
                 self.set_flags(self.c());
                 (1, 5)
             }
@@ -605,7 +642,7 @@ impl State8080 {
             }
             // DCR M
             0x35 => {
-                self.m_mut().wrapping_sub(1);
+                *self.m_mut() = self.m().wrapping_sub(1);
                 (1, 10)
             }
             // MVI M, D8
@@ -623,6 +660,11 @@ impl State8080 {
                 self.a = self.read_byte(self.read_bytes_immediate());
                 (3, 13)
             }
+            // DCR A
+            0x3d => {
+                self.a = self.a.wrapping_sub(1);
+                (1, 7)
+            }
             // MVI A, D8
             0x3e => {
                 self.a = self.read_byte_immediate();
@@ -638,15 +680,30 @@ impl State8080 {
                 *self.d_mut() = self.m();
                 (1, 7)
             }
+            // MOV D,A
+            0x57 => {
+                *self.d_mut() = self.a;
+                (1, 5)
+            }
             // MOV E,M
             0x5e => {
                 *self.e_mut() = self.m();
                 (1, 7)
             }
+            // MOV E,A
+            0x5f => {
+                *self.e_mut() = self.a;
+                (1, 5)
+            }
             // MOV H,M
             0x66 => {
                 *self.h_mut() = self.m();
                 (1, 7)
+            }
+            // MOV H,A
+            0x67 => {
+                *self.h_mut() = self.a;
+                (1, 5)
             }
             // MOV L,A
             0x6f => {
@@ -918,7 +975,7 @@ impl State8080 {
                     self.ret();
                     (0, 11)
                 } else {
-                    (0, 5)
+                    (3, 5)
                 }
             }
             // RET
@@ -1064,7 +1121,7 @@ impl State8080 {
             }
             // Unimplemented
             _ => {
-                println!("Unimplemented instruction: {:02x}", op_code);
+                println!("Unimplemented instruction: {:02x} {}", op_code, self.next_opcode());
                 process::exit(0)
             }
         };

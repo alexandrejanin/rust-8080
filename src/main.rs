@@ -8,6 +8,7 @@ mod machine;
 
 use crate::machine::Machine;
 use machine::SpaceInvaders;
+use std::time::Duration;
 
 fn main() {
     // Init machine
@@ -48,6 +49,10 @@ fn main() {
             Event::Loop(loop_event) => match loop_event {
                 Loop::Update(args) => machine.step(args.dt),
                 Loop::Render(_) => {
+                    // Start of frame interrupt
+                    //machine.interrupt(1);
+                    //std::thread::sleep(Duration::from_millis(8));
+
                     // Convert image buffer to texture and draw
                     screen_texture
                         .update(&mut window.encoder, &machine.screen())
