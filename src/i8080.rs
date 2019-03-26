@@ -10,9 +10,7 @@ pub union RegisterPair {
 
 impl RegisterPair {
     pub fn new() -> Self {
-        Self {
-            both: 0
-        }
+        Self { both: 0 }
     }
 
     pub fn both(&self) -> u16 {
@@ -87,6 +85,8 @@ impl Flags {
     }
 }
 
+const MEMORY_SIZE: usize = 0x4000;
+
 pub struct State8080 {
     a: u8,
     bc: RegisterPair,
@@ -94,7 +94,7 @@ pub struct State8080 {
     hl: RegisterPair,
     sp: u16,
     pc: u16,
-    memory: [u8; 16384],
+    memory: [u8; MEMORY_SIZE],
     flags: Flags,
     interrupts_enabled: bool,
     cycle_debt: u64,
@@ -105,7 +105,7 @@ impl fmt::Display for State8080 {
         write!(
             f,
             "{}\nA:{:02x}\nB:{:02x}\nC:{:02x}\nD:{:02x}\nE:{:02x}\nH:{:02x}\nL:{:02x}\n\
-            AF:{:04x}\nBC:{:04x}\nDE:{:04x}\nHL:{:04x}\nsp:{:04x}\npc:{:04x}\nflags:{:?}",
+             AF:{:04x}\nBC:{:04x}\nDE:{:04x}\nHL:{:04x}\nsp:{:04x}\npc:{:04x}\nflags:{:?}",
             self.next_opcode(),
             self.a,
             self.b(),
@@ -130,7 +130,7 @@ impl State8080 {
 
     pub fn new(rom: &[u8]) -> Self {
         // Initialize ram and copy rom
-        let mut memory = [0; 16384];
+        let mut memory = [0; MEMORY_SIZE];
         memory[..rom.len()].clone_from_slice(rom);
 
         Self {
@@ -155,10 +155,6 @@ impl State8080 {
 
     pub fn af(&self) -> u16 {
         (u16::from(self.a) << 8) | u16::from(self.flags.psw())
-    }
-
-    pub fn a(&self) -> u8 {
-        self.a
     }
 
     pub fn bc(&self) -> u16 {
@@ -313,6 +309,9 @@ impl State8080 {
     }
 
     fn write_byte(&mut self, address: u16, value: u8) {
+        if address < 0x2000 {
+            panic!("Writing to ROM at ${:04x}", address);
+        }
         self.memory[address as usize] = value
     }
 
@@ -374,9 +373,19 @@ impl State8080 {
         self.flags.carry = result > 0xff;
 
         // true when the result is even
-        self.flags.even_parity = Self::parity((result & 0xff) as u8);
+        self.flags.even_parity = Self::parity(result as u8);
 
         self.a = result as u8;
+    }
+
+    /// Double add
+    fn dad(&mut self, operand: u16) {
+        let result: u32 = u32::from(self.hl()) + u32::from(operand);
+
+        // true when instruction resulted in a carry out
+        self.flags.carry = result > 0xffff;
+
+        *self.hl_mut() = result as u16;
     }
 
     /// Bitwise AND between the A register and `operand`
@@ -470,7 +479,16 @@ impl State8080 {
 
         println!(
             "{:04x}:\t{:02x}\t{}\na={:02x} b={:02x} c={:02x} d={:02x} e={:02x} h={:02x} l={:02x}\n",
-            self.pc, self.read_byte(self.pc), self.next_opcode(), self.a, self.b(), self.c(), self.d(), self.e(), self.h(), self.l(),
+            self.pc,
+            self.read_byte(self.pc),
+            self.next_opcode(),
+            self.a,
+            self.b(),
+            self.c(),
+            self.d(),
+            self.e(),
+            self.h(),
+            self.l(),
         );
 
         let (pc_incr, cycles) = match op_code {
@@ -518,7 +536,7 @@ impl State8080 {
             }
             // DAD B
             0x09 => {
-                *self.hl_mut() += self.bc();
+                self.dad(self.bc());
                 (1, 10)
             }
             // LDAX B
@@ -576,7 +594,7 @@ impl State8080 {
             }
             // DAD D
             0x19 => {
-                *self.hl_mut() += self.de();
+                self.dad(self.de());
                 (1, 10)
             }
             // LDAX D
@@ -617,7 +635,7 @@ impl State8080 {
             }
             // DAD H
             0x29 => {
-                *self.hl_mut() += self.hl();
+                self.dad(self.hl());
                 (1, 10)
             }
             // MVI L, D8
@@ -643,6 +661,7 @@ impl State8080 {
             // DCR M
             0x35 => {
                 *self.m_mut() = self.m().wrapping_sub(1);
+                self.set_flags(self.m());
                 (1, 10)
             }
             // MVI M, D8
@@ -663,6 +682,7 @@ impl State8080 {
             // DCR A
             0x3d => {
                 self.a = self.a.wrapping_sub(1);
+                self.set_flags(self.a);
                 (1, 7)
             }
             // MVI A, D8
@@ -674,6 +694,11 @@ impl State8080 {
             0x3f => {
                 self.flags.carry = !self.flags.carry;
                 (1, 4)
+            }
+            // MOV C,A
+            0x4f => {
+                *self.c_mut() = self.a;
+                (1, 5)
             }
             // MOV D,M
             0x56 => {
@@ -1021,6 +1046,15 @@ impl State8080 {
                 self.push(self.de());
                 (1, 11)
             }
+            // RC
+            0xd8 => {
+                if self.flags.carry {
+                    self.ret();
+                    (0, 11)
+                } else {
+                    (1, 5)
+                }
+            }
             // JC adr
             0xda => {
                 if self.flags.carry {
@@ -1121,7 +1155,11 @@ impl State8080 {
             }
             // Unimplemented
             _ => {
-                println!("Unimplemented instruction: {:02x} {}", op_code, self.next_opcode());
+                println!(
+                    "Unimplemented instruction: {:02x} {}",
+                    op_code,
+                    self.next_opcode()
+                );
                 process::exit(0)
             }
         };

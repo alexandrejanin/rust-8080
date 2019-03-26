@@ -1,6 +1,6 @@
 use piston_window::{
     self as pw, clear, color, image, text, Event, EventLoop, Glyphs, Input, Loop, Texture,
-    TextureSettings, Transformed, WindowSettings
+    TextureSettings, Transformed, WindowSettings,
 };
 
 mod i8080;
@@ -8,7 +8,6 @@ mod machine;
 
 use crate::machine::Machine;
 use machine::SpaceInvaders;
-use std::time::Duration;
 
 fn main() {
     // Init machine
@@ -43,8 +42,10 @@ fn main() {
     // While window is open
     while let Some(event) = window.next() {
         match event {
-            Event::Input(input_event) => if let Input::Button(args) = input_event {
-                machine.key_press(args.button, args.state)
+            Event::Input(input_event) => {
+                if let Input::Button(args) = input_event {
+                    machine.key_press(args.button, args.state)
+                }
             }
             Event::Loop(loop_event) => match loop_event {
                 Loop::Update(args) => machine.step(args.dt),
@@ -90,7 +91,7 @@ fn main() {
                     machine.interrupt(2);
                 }
                 _ => {}
-            }
+            },
             _ => {}
         }
     }

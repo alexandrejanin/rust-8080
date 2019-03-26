@@ -163,7 +163,7 @@ impl IOState for SpaceInvadersIO {
             4 => {
                 *self.shift_register.lsb_mut() = self.shift_register.msb();
                 *self.shift_register.msb_mut() = value;
-            },
+            }
             _ => {}
         }
     }
