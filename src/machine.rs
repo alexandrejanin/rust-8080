@@ -1,17 +1,15 @@
 use crate::i8080::{RegisterPair, State8080};
-use image::{Rgba, RgbaImage};
-use piston_window::{Button, ButtonState, Key};
 
 pub trait Machine {
-    fn screen(&self) -> RgbaImage;
-    fn width(&self) -> u32;
-    fn height(&self) -> u32;
+    fn screen(&self) -> Vec<u32>;
+    fn width(&self) -> usize;
+    fn height(&self) -> usize;
 
     fn step(&mut self, dt: f64);
 
     fn interrupt(&mut self, interrupt_num: u16);
 
-    fn key_press(&mut self, button: Button, button_state: ButtonState);
+    fn update_input(&mut self, window: &minifb::Window);
 
     fn debug_text(&self) -> Vec<String>;
 }
@@ -43,22 +41,18 @@ impl SpaceInvaders {
 }
 
 impl Machine for SpaceInvaders {
-    fn screen(&self) -> RgbaImage {
+    fn screen(&self) -> Vec<u32> {
         let mut x = 0;
         let mut y = self.height() - 1;
 
-        let mut buffer = RgbaImage::new(self.width(), self.height());
+        let mut buffer = vec![0u32; self.width() * self.height()];
 
         for &byte in &self.state.memory()[0x2400..0x4000] {
             for bit in 0..8 {
                 let pixel_on = byte & (1 << bit) != 0;
-                let pixel: [u8; 4] = if pixel_on {
-                    [0xff, 0xff, 0xff, 0xff]
-                } else {
-                    [0x00, 0x00, 0x00, 0xff]
-                };
+                let pixel: u32 = if pixel_on { 0xffffffff } else { 0x000000ff };
 
-                buffer.put_pixel(x, y, Rgba { data: pixel });
+                buffer[x + y * self.width()] = pixel;
 
                 if y > 0 {
                     y -= 1;
@@ -72,11 +66,11 @@ impl Machine for SpaceInvaders {
         buffer
     }
 
-    fn width(&self) -> u32 {
+    fn width(&self) -> usize {
         224
     }
 
-    fn height(&self) -> u32 {
+    fn height(&self) -> usize {
         256
     }
 
@@ -88,8 +82,8 @@ impl Machine for SpaceInvaders {
         self.state.interrupt(interrupt_num)
     }
 
-    fn key_press(&mut self, button: Button, button_state: ButtonState) {
-        self.io_state.key_press(button, button_state)
+    fn update_input(&mut self, window: &minifb::Window) {
+        self.io_state.update_input(window)
     }
 
     fn debug_text(&self) -> Vec<String> {
@@ -107,6 +101,7 @@ impl Machine for SpaceInvaders {
 pub struct SpaceInvadersIO {
     shift_register: RegisterPair,
     shift_amount: u8,
+    port0: u8,
     port1: u8,
     port2: u8,
 }
@@ -116,33 +111,25 @@ impl SpaceInvadersIO {
         Self {
             shift_register: RegisterPair::new(),
             shift_amount: 0,
-            port1: 0b10010000,
-            port2: 0b00100000,
+            port0: 0b01110000,
+            port1: 0b00010000,
+            port2: 0b00000000,
         }
     }
 
-    fn key_press(&mut self, button: Button, button_state: ButtonState) {
-        if let Button::Keyboard(key) = button {
-            match key {
-                // Coin
-                Key::C => Self::set_key(&mut self.port1, 0, button_state),
-                // P1 Start
-                Key::Return => Self::set_key(&mut self.port1, 2, button_state),
-                // P1 shoot
-                Key::Space => Self::set_key(&mut self.port1, 4, button_state),
-                // P1 left
-                Key::Left => Self::set_key(&mut self.port1, 5, button_state),
-                // P1 right
-                Key::Right => Self::set_key(&mut self.port1, 6, button_state),
-                _ => {}
-            }
-        }
+    fn update_input(&mut self, window: &minifb::Window) {
+        // Fire
+        Self::set_key(&mut self.port0, 4, window.is_key_down(minifb::Key::Space));
+        // Left
+        Self::set_key(&mut self.port0, 5, window.is_key_down(minifb::Key::Left));
+        // Right
+        Self::set_key(&mut self.port0, 6, window.is_key_down(minifb::Key::Right));
     }
 
-    fn set_key(port: &mut u8, bit: u8, button_state: ButtonState) {
-        match button_state {
-            ButtonState::Press => *port |= 1 << bit,
-            ButtonState::Release => *port &= !(1 << bit),
+    fn set_key(port: &mut u8, bit: u8, on: bool) {
+        match on {
+            true => *port |= 1 << bit,
+            false => *port &= !(1 << bit),
         }
     }
 }
@@ -160,11 +147,14 @@ impl IOState for SpaceInvadersIO {
     fn output(&mut self, port: u8, value: u8) {
         match port {
             2 => self.shift_amount = value & 0b111,
+            3 => {}
             4 => {
                 *self.shift_register.lsb_mut() = self.shift_register.msb();
                 *self.shift_register.msb_mut() = value;
             }
-            _ => {}
+            5 => {}
+            6 => {}
+            _ => panic!("Cannot write to port: {}", port),
         }
     }
 }

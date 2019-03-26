@@ -477,6 +477,7 @@ impl State8080 {
     fn emulate(&mut self, io_state: &mut IOState) -> u64 {
         let op_code = self.read_byte(self.pc);
 
+        //*
         println!(
             "{:04x}:\t{:02x}\t{}\na={:02x} b={:02x} c={:02x} d={:02x} e={:02x} h={:02x} l={:02x}\n",
             self.pc,
@@ -490,6 +491,7 @@ impl State8080 {
             self.h(),
             self.l(),
         );
+        // */
 
         let (pc_incr, cycles) = match op_code {
             // NOP
