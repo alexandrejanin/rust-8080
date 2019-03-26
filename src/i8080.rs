@@ -492,7 +492,6 @@ impl State8080 {
             self.l(),
         );
         // */
-
         let (pc_incr, cycles) = match op_code {
             // NOP
             0x00 => (1, 4),

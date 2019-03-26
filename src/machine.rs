@@ -50,7 +50,11 @@ impl Machine for SpaceInvaders {
         for &byte in &self.state.memory()[0x2400..0x4000] {
             for bit in 0..8 {
                 let pixel_on = byte & (1 << bit) != 0;
-                let pixel: u32 = if pixel_on { 0xffffffff } else { 0x000000ff };
+                let pixel: u32 = if pixel_on {
+                    0xff_ff_ff_ff
+                } else {
+                    0x00_00_00_00
+                };
 
                 buffer[x + y * self.width()] = pixel;
 
