@@ -24,18 +24,16 @@ fn main() {
     .unwrap();
 
     while window.is_open() {
+        machine.step(0.008);
+        std::thread::sleep(Duration::from_millis(8));
         // Start of frame interrupt
         machine.interrupt(1);
-        std::thread::sleep(Duration::from_millis(8));
 
         machine.step(0.008);
-
-        window.update_with_buffer(&machine.screen()).unwrap();
-
+        std::thread::sleep(Duration::from_millis(8));
         // VBlank interrupt
         machine.interrupt(2);
-        std::thread::sleep(Duration::from_millis(8));
 
-        machine.step(0.008);
+        window.update_with_buffer(&machine.screen()).unwrap();
     }
 }
