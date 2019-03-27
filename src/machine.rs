@@ -4,13 +4,9 @@ pub trait Machine {
     fn screen(&self) -> Vec<u32>;
     fn width(&self) -> usize;
     fn height(&self) -> usize;
-
     fn step(&mut self, dt: f64);
-
     fn interrupt(&mut self, interrupt_num: u16);
-
     fn update_input(&mut self, window: &minifb::Window);
-
     fn debug_text(&self) -> Vec<String>;
 }
 
