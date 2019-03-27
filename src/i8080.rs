@@ -44,11 +44,27 @@ impl RegisterPair {
 
 #[derive(Debug)]
 struct Flags {
-    zero: bool,
     sign_negative: bool,
+    zero: bool,
+    aux_carry: bool,
     even_parity: bool,
     carry: bool,
-    aux_carry: bool,
+}
+
+impl fmt::Display for Flags {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        let mut flags: String = String::from("[");
+
+        if self.sign_negative { flags += "S," }
+        if self.zero { flags += "Z," }
+        if self.aux_carry { flags += "A," }
+        if self.even_parity { flags += "P," }
+        if self.carry { flags += "C," }
+
+        flags += "]";
+
+        write!(f, "{}", flags)
+    }
 }
 
 impl Flags {
@@ -56,20 +72,20 @@ impl Flags {
     pub fn psw(&self) -> u8 {
         let mut psw = 0;
 
-        if self.carry {
-            psw |= 1
-        }
-        if self.even_parity {
-            psw |= 1 << 2
-        }
-        if self.aux_carry {
-            psw |= 1 << 4
+        if self.sign_negative {
+            psw |= 1 << 7
         }
         if self.zero {
             psw |= 1 << 6
         }
-        if self.sign_negative {
-            psw |= 1 << 7
+        if self.aux_carry {
+            psw |= 1 << 4
+        }
+        if self.even_parity {
+            psw |= 1 << 2
+        }
+        if self.carry {
+            psw |= 1
         }
 
         psw
@@ -98,15 +114,22 @@ pub struct State8080 {
     flags: Flags,
     interrupts_enabled: bool,
     cycle_debt: u64,
+    indent: usize,
 }
 
 impl fmt::Display for State8080 {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        let indent = "\t".repeat(self.indent);
         write!(
             f,
-            "{}\nA:{:02x}\nB:{:02x}\nC:{:02x}\nD:{:02x}\nE:{:02x}\nH:{:02x}\nL:{:02x}\n\
-             AF:{:04x}\nBC:{:04x}\nDE:{:04x}\nHL:{:04x}\nsp:{:04x}\npc:{:04x}\nflags:{:?}",
+            "{}{:04x}:\t{:02x}\t{}\n\
+            {}a={:02x} b={:02x} c={:02x} d={:02x} e={:02x} h={:02x} l={:02x}\n\
+            {}sp={:04x} flags={}\n",
+            indent,
+            self.pc,
+            self.read_byte(self.pc),
             self.next_opcode(),
+            indent,
             self.a,
             self.b(),
             self.c(),
@@ -114,12 +137,8 @@ impl fmt::Display for State8080 {
             self.e(),
             self.h(),
             self.l(),
-            self.af(),
-            self.bc(),
-            self.de(),
-            self.hl(),
+            indent,
             self.sp,
-            self.pc,
             self.flags
         )
     }
@@ -150,6 +169,7 @@ impl State8080 {
             },
             interrupts_enabled: false,
             cycle_debt: 0,
+            indent: 0
         }
     }
 
@@ -218,27 +238,30 @@ impl State8080 {
             self.push(self.pc);
             self.pc = 8 * interrupt_num;
             self.interrupts_enabled = false;
+            self.indent += 1;
         }
     }
 
     /// Steps the emulator `dt` seconds.
-    /// Returns the number of cycles that were executed.
-    pub fn step(&mut self, dt: f64, io_state: &mut IOState) -> u64 {
+    /// Returns the number of instructions and cycles that were executed.
+    pub fn step(&mut self, dt: f64, io_state: &mut IOState) -> (u64, u64) {
         // Simulates 2 MHz
         const FREQ: f64 = 2_000_000.0;
 
         // Cycle debt represents how many extra cycles we ran last time, so we run that many less this time
         let step_cycles = (FREQ * dt) as u64 - self.cycle_debt;
 
+        let mut instructions = 0;
         let mut spent_cycles = 0;
 
         while spent_cycles < step_cycles {
+            instructions += 1;
             spent_cycles += self.emulate(io_state);
         }
 
         self.cycle_debt = spent_cycles - step_cycles;
 
-        spent_cycles
+        (instructions, spent_cycles)
     }
 
     // Private
@@ -285,12 +308,23 @@ impl State8080 {
     }
 
     fn m_mut(&mut self) -> &mut u8 {
-        &mut self.memory[self.hl() as usize]
+        self.byte_mut(self.hl())
+    }
+
+    fn byte_mut(&mut self, address: u16) -> &mut u8 {
+        if address < 0x2000 {
+            panic!("Writing to ROM at ${:04x}", address);
+        }
+        &mut self.memory[address as usize]
     }
 
     /// Reads the byte at the specified address
     fn read_byte(&self, address: u16) -> u8 {
-        self.memory[address as usize]
+        if address >= 0x4000 {
+            self.memory[(address % 0x2000 + 0x2000) as usize]
+        } else {
+            self.memory[address as usize]
+        }
     }
 
     /// Reads two bytes starting at the specified address
@@ -309,10 +343,7 @@ impl State8080 {
     }
 
     fn write_byte(&mut self, address: u16, value: u8) {
-        if address < 0x2000 {
-            panic!("Writing to ROM at ${:04x}", address);
-        }
-        self.memory[address as usize] = value
+        *self.byte_mut(address) = value
     }
 
     fn write_bytes(&mut self, address: u16, value: u16) {
@@ -327,141 +358,97 @@ impl State8080 {
     fn call(&mut self) {
         self.push(self.pc + 3);
         self.pc = self.read_bytes_immediate();
+        self.indent += 1;
     }
 
     fn ret(&mut self) {
         self.pc = self.pop();
+        self.indent -= 1;
     }
 
     fn pop(&mut self) -> u16 {
-        let value = self.read_bytes(self.sp);
         self.sp += 2;
-        value
+        self.read_bytes(self.sp - 2)
     }
 
     fn push(&mut self, value: u16) {
-        self.write_bytes(self.sp - 2, value);
         self.sp -= 2;
+        self.write_bytes(self.sp, value);
     }
 
-    /// Sets flags using `value` as the result of the last operation
+    /// Sets flags using `value` as the result of the last increment or decrement
+    /// (ignores carry flag)
     fn set_flags(&mut self, value: u8) {
-        // true when result is zero
         self.flags.zero = value == 0;
-
-        // true when result is negative (sign bit is set)
         self.flags.sign_negative = (value & (1 << 7)) != 0;
-
-        // true when instruction resulted in a carry out
-        self.flags.carry = false;
-
-        // true when the result is even
         self.flags.even_parity = Self::parity(value);
     }
 
-    /// Adds `operand` to the A register, setting flags appropriately
+    /// Add `operand` to A
     fn add(&mut self, operand: u8) {
         let result: u16 = u16::from(self.a) + u16::from(operand);
-
-        // true when result is zero
-        self.flags.zero = result.trailing_zeros() >= 8;
-
-        // true when result is negative (sign bit is set)
+        self.flags.zero = result & 0xff == 0;
         self.flags.sign_negative = (result & (1 << 7)) != 0;
-
-        // true when instruction resulted in a carry out
         self.flags.carry = result > 0xff;
-
-        // true when the result is even
         self.flags.even_parity = Self::parity(result as u8);
-
         self.a = result as u8;
     }
 
-    /// Double add
+    /// Subtract `operand` from A
+    fn sub(&mut self, operand: u8) {
+        let result: u16 = u16::from(self.a) - u16::from(operand + self.flags.carry as u8);
+        self.flags.zero = result & 0xff == 0;
+        self.flags.sign_negative = (result & (1 << 7)) != 0;
+        self.flags.carry = (result & 0x0100) != 0;
+        self.flags.even_parity = Self::parity(result as u8);
+        self.a = result as u8;
+    }
+
+    /// Add `operand` to HL
     fn dad(&mut self, operand: u16) {
         let result: u32 = u32::from(self.hl()) + u32::from(operand);
-
-        // true when instruction resulted in a carry out
         self.flags.carry = result > 0xffff;
-
         *self.hl_mut() = result as u16;
     }
 
-    /// Bitwise AND between the A register and `operand`
+    /// Bitwise AND between A and `operand`
     fn and(&mut self, operand: u8) {
         let result: u8 = self.a & operand;
-
-        // true when result is zero
         self.flags.zero = result == 0;
-
-        // true when result is negative (sign bit is set)
         self.flags.sign_negative = (result & (1 << 7)) != 0;
-
-        // true when instruction resulted in a carry out
         self.flags.carry = false;
-
-        // true when the result is even
         self.flags.even_parity = Self::parity(result);
-
         self.a = result;
     }
 
-    /// Bitwise OR between the A register and `operand`
+    /// Bitwise OR between A and `operand`
     fn or(&mut self, operand: u8) {
-        let result: u8 = self.a | operand;
-
-        // true when result is zero
-        self.flags.zero = result == 0;
-
-        // true when result is negative (sign bit is set)
-        self.flags.sign_negative = (result & (1 << 7)) != 0;
-
-        // true when instruction resulted in a carry out
+        self.a |= operand;
+        self.flags.zero = self.a == 0;
+        self.flags.sign_negative = (self.a & (1 << 7)) != 0;
         self.flags.carry = false;
-
-        // true when the result is even
-        self.flags.even_parity = Self::parity(result);
-
-        self.a = result;
+        self.flags.even_parity = Self::parity(self.a);
     }
 
-    /// Bitwise XOR between the A register and `operand`
+    /// Bitwise XOR between A and `operand`
     fn xor(&mut self, operand: u8) {
-        let result: u8 = self.a ^ operand;
-
-        // true when result is zero
-        self.flags.zero = result == 0;
-
-        // true when result is negative (sign bit is set)
-        self.flags.sign_negative = (result & (1 << 7)) != 0;
-
-        // true when instruction resulted in a carry out
+        self.a ^= operand;
+        self.flags.zero = self.a == 0;
+        self.flags.sign_negative = (self.a & (1 << 7)) != 0;
         self.flags.carry = false;
-
-        // true when the result is even
-        self.flags.even_parity = Self::parity(result);
-
-        self.a = result;
+        self.flags.even_parity = Self::parity(self.a);
     }
 
+    /// Compare `operand` to A
     fn cmp(&mut self, operand: u8) {
         let result: u8 = self.a.wrapping_sub(operand);
-
-        // true when result is zero
         self.flags.zero = result == 0;
-
-        // true when result is negative (sign bit is set)
         self.flags.sign_negative = (result & (1 << 7)) != 0;
-
-        // true when instruction resulted in a carry out
         self.flags.carry = self.a < operand;
-
-        // true when the result is even
         self.flags.even_parity = Self::parity(result);
     }
 
-    /// Returns true if the byte has an even number of 1s
+    /// Returns true if the byte has an even number of `1`s
     fn parity(mut x: u8) -> bool {
         let mut parity = 0u8;
         while x != 0 {
@@ -477,22 +464,11 @@ impl State8080 {
     fn emulate(&mut self, io_state: &mut IOState) -> u64 {
         let op_code = self.read_byte(self.pc);
 
-        //*
-        println!(
-            "{:04x}:\t{:02x}\t{}\na={:02x} b={:02x} c={:02x} d={:02x} e={:02x} h={:02x} l={:02x}\n",
-            self.pc,
-            self.read_byte(self.pc),
-            self.next_opcode(),
-            self.a,
-            self.b(),
-            self.c(),
-            self.d(),
-            self.e(),
-            self.h(),
-            self.l(),
-        );
-        // */
-        let (pc_incr, cycles) = match op_code {
+        if self.pc != 0xada && self.pc != 0xadd && self.pc != 0xade {
+            println!("{}", self);
+        }
+
+        let (op_length, cycles) = match op_code {
             // NOP
             0x00 => (1, 4),
             // LXI B, D16
@@ -639,6 +615,16 @@ impl State8080 {
                 self.dad(self.hl());
                 (1, 10)
             }
+            // LHLD adr
+            0x2a => {
+                *self.hl_mut() = self.read_bytes(self.read_bytes_immediate());
+                (3, 16)
+            }
+            // DCX H
+            0x2b => {
+                *self.hl_mut() += 1;
+                (1, 5)
+            }
             // MVI L, D8
             0x2e => {
                 *self.l_mut() = self.read_byte_immediate();
@@ -696,6 +682,11 @@ impl State8080 {
                 self.flags.carry = !self.flags.carry;
                 (1, 4)
             }
+            // MOV B,M
+            0x46 => {
+                *self.b_mut() = self.m();
+                (1, 5)
+            }
             // MOV C,A
             0x4f => {
                 *self.c_mut() = self.a;
@@ -736,10 +727,30 @@ impl State8080 {
                 *self.l_mut() = self.a;
                 (1, 5)
             }
+            // MOV M,B
+            0x70 => {
+                *self.m_mut() = self.b();
+                (1, 7)
+            }
+            // HLT
+            0x76 => {
+                println!("HLT instruction received");
+                process::exit(0)
+            }
             // MOV M,A
             0x77 => {
                 *self.m_mut() = self.a;
                 (1, 7)
+            }
+            // MOV A,B
+            0x78 => {
+                self.a = self.b();
+                (1, 5)
+            }
+            // MOV A,C
+            0x79 => {
+                self.a = self.c();
+                (1, 5)
             }
             // MOV A,D
             0x7a => {
@@ -756,15 +767,15 @@ impl State8080 {
                 self.a = self.h();
                 (1, 5)
             }
+            // MOV A,L
+            0x7d => {
+                self.a = self.l();
+                (1, 5)
+            }
             // MOV A,M
             0x7e => {
                 self.a = self.m();
                 (1, 7)
-            }
-            // HLT
-            0x76 => {
-                println!("HLT instruction received");
-                process::exit(0)
             }
             // ADD B
             0x80 => {
@@ -966,15 +977,19 @@ impl State8080 {
                 self.cmp(self.a);
                 (1, 4)
             }
+            // RNZ
+            0xc0 => {
+                if !self.flags.zero {
+                    self.ret();
+                    (0, 11)
+                } else {
+                    (1, 5)
+                }
+            }
             // POP B
             0xc1 => {
                 *self.bc_mut() = self.pop();
                 (1, 10)
-            }
-            // PUSH B
-            0xc5 => {
-                self.push(self.bc());
-                (1, 11)
             }
             // JNZ adr
             0xc2 => {
@@ -990,6 +1005,20 @@ impl State8080 {
                 self.jmp();
                 (0, 10)
             }
+            // CNZ adr
+            0xc4 => {
+                if !self.flags.zero {
+                    self.call();
+                    (0, 17)
+                } else {
+                    (3, 11)
+                }
+            }
+            // PUSH B
+            0xc5 => {
+                self.push(self.bc());
+                (1, 11)
+            }
             // ADI D8
             0xc6 => {
                 self.add(self.read_byte_immediate());
@@ -1001,7 +1030,7 @@ impl State8080 {
                     self.ret();
                     (0, 11)
                 } else {
-                    (3, 5)
+                    (1, 5)
                 }
             }
             // RET
@@ -1022,6 +1051,15 @@ impl State8080 {
             0xcd => {
                 self.call();
                 (0, 17)
+            }
+            // RNC
+            0xd0 => {
+                if !self.flags.carry {
+                    self.ret();
+                    (0, 11)
+                } else {
+                    (1, 5)
+                }
             }
             // POP D
             0xd1 => {
@@ -1046,6 +1084,11 @@ impl State8080 {
             0xd5 => {
                 self.push(self.de());
                 (1, 11)
+            }
+            // SUI d8
+            0xd6 => {
+                self.sub(self.read_byte_immediate());
+                (2, 7)
             }
             // RC
             0xd8 => {
@@ -1135,6 +1178,11 @@ impl State8080 {
                 self.push(self.af());
                 (1, 11)
             }
+            // ORI d8
+            0xf6 => {
+                self.or(self.read_byte_immediate());
+                (2, 7)
+            }
             // JM adr
             0xfa => {
                 if self.flags.sign_negative {
@@ -1157,7 +1205,8 @@ impl State8080 {
             // Unimplemented
             _ => {
                 println!(
-                    "Unimplemented instruction: {:02x} {}",
+                    "Unimplemented instruction: {:04x} {:02x} {}",
+                    self.pc,
                     op_code,
                     self.next_opcode()
                 );
@@ -1165,7 +1214,7 @@ impl State8080 {
             }
         };
 
-        self.pc += pc_incr;
+        self.pc += op_length;
         cycles
     }
 

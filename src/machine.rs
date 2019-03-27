@@ -19,6 +19,7 @@ pub trait IOState {
 pub struct SpaceInvaders {
     state: State8080,
     io_state: SpaceInvadersIO,
+    instructions: u64,
     cycles: u64,
 }
 
@@ -31,6 +32,7 @@ impl SpaceInvaders {
         Self {
             state: State8080::new(rom),
             io_state: SpaceInvadersIO::new(),
+            instructions: 0,
             cycles: 0,
         }
     }
@@ -75,7 +77,9 @@ impl Machine for SpaceInvaders {
     }
 
     fn step(&mut self, dt: f64) {
-        self.cycles += self.state.step(dt, &mut self.io_state);
+        let (instructions, cycles) = self.state.step(dt, &mut self.io_state);
+        self.instructions += instructions;
+        self.cycles += cycles;
     }
 
     fn interrupt(&mut self, interrupt_num: u16) {

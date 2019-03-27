@@ -21,7 +21,7 @@ fn main() {
             scale: minifb::Scale::X2,
         },
     )
-    .unwrap();
+        .unwrap();
 
     while window.is_open() {
         machine.step(0.008);
