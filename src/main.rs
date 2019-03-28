@@ -1,3 +1,6 @@
+#![deny(clippy::pedantic)]
+#![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+
 mod i8080;
 mod machine;
 
@@ -20,8 +23,7 @@ fn main() {
             resize: false,
             scale: minifb::Scale::X2,
         },
-    )
-        .unwrap();
+    ).unwrap();
 
     while window.is_open() {
         machine.step(0.008);
@@ -35,5 +37,6 @@ fn main() {
         machine.interrupt(2);
 
         window.update_with_buffer(&machine.screen()).unwrap();
+        machine.update_input(&window);
     }
 }

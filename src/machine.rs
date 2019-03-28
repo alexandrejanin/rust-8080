@@ -7,7 +7,6 @@ pub trait Machine {
     fn step(&mut self, dt: f64);
     fn interrupt(&mut self, interrupt_num: u16);
     fn update_input(&mut self, window: &minifb::Window);
-    fn debug_text(&self) -> Vec<String>;
 }
 
 /// Interface between the emulator's IO functions and the machine state
@@ -43,7 +42,7 @@ impl Machine for SpaceInvaders {
         let mut x = 0;
         let mut y = self.height() - 1;
 
-        let mut buffer = vec![0u32; self.width() * self.height()];
+        let mut buffer = vec![0_u32; self.width() * self.height()];
 
         for &byte in &self.state.memory()[0x2400..0x4000] {
             for bit in 0..8 {
@@ -89,17 +88,6 @@ impl Machine for SpaceInvaders {
     fn update_input(&mut self, window: &minifb::Window) {
         self.io_state.update_input(window)
     }
-
-    fn debug_text(&self) -> Vec<String> {
-        vec![
-            format!("Cycles: {}", self.cycles),
-            format!("Seconds: {}", self.cycles / 2_000_000),
-            self.state.next_opcode(),
-            format!("AF: {:04x} BC: {:04x}", self.state.af(), self.state.bc()),
-            format!("DE: {:04x} HL: {:04x}", self.state.de(), self.state.hl()),
-            format!("PC: {:04x} SP: {:04x}", self.state.pc(), self.state.sp()),
-        ]
-    }
 }
 
 pub struct SpaceInvadersIO {
@@ -115,9 +103,9 @@ impl SpaceInvadersIO {
         Self {
             shift_register: RegisterPair::new(),
             shift_amount: 0,
-            port0: 0b01110000,
-            port1: 0b00010000,
-            port2: 0b00000000,
+            port0: 0b0111_0000,
+            port1: 0b0001_0000,
+            port2: 0b0000_0000,
         }
     }
 
@@ -131,9 +119,10 @@ impl SpaceInvadersIO {
     }
 
     fn set_key(port: &mut u8, bit: u8, on: bool) {
-        match on {
-            true => *port |= 1 << bit,
-            false => *port &= !(1 << bit),
+        if on {
+            *port |= 1 << bit
+        } else {
+            *port &= !(1 << bit)
         }
     }
 }
@@ -151,13 +140,11 @@ impl IOState for SpaceInvadersIO {
     fn output(&mut self, port: u8, value: u8) {
         match port {
             2 => self.shift_amount = value & 0b111,
-            3 => {}
             4 => {
                 *self.shift_register.lsb_mut() = self.shift_register.msb();
                 *self.shift_register.msb_mut() = value;
             }
-            5 => {}
-            6 => {}
+            3 | 5 | 6 => {}
             _ => panic!("Cannot write to port: {}", port),
         }
     }
