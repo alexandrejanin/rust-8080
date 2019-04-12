@@ -502,10 +502,10 @@ impl CpuState {
             msb += 6;
         }
 
-        let answer = (msb << 4) as u16 | lsb as u16;
-        self.flags.set_all_but_aux_carry(answer);
+        let result = (msb << 4) | lsb;
+        self.flags.set_all_but_aux_carry(result);
 
-        self.a = answer as u8;
+        self.a = result as u8;
     }
 
     fn next_opcode(&self) -> String {
@@ -774,6 +774,11 @@ impl CpuState {
             // MOV B,A
             0x47 => {
                 *self.b_mut() = self.a;
+                (1, 5)
+            }
+            // MOV C,B
+            0x48 => {
+                *self.c_mut() = self.b();
                 (1, 5)
             }
             // MOV C,M

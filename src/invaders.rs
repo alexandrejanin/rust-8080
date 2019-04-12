@@ -148,20 +148,28 @@ impl SpaceInvadersIO {
     }
 
     fn update_input(&mut self, window: &minifb::Window) {
-        // Fire
-        Self::set_key(&mut self.port0, 4, window.is_key_down(minifb::Key::Space));
-        // Left
-        Self::set_key(&mut self.port0, 5, window.is_key_down(minifb::Key::Left));
-        // Right
-        Self::set_key(&mut self.port0, 6, window.is_key_down(minifb::Key::Right));
         // Credit
         Self::set_key(&mut self.port1, 0, window.is_key_down(minifb::Key::C));
         // P2 Start
-        Self::set_key(&mut self.port1, 1, window.is_key_down(minifb::Key::NumPad2));
+        Self::set_key(&mut self.port1, 1, window.is_key_down(minifb::Key::Q));
         // P1 Start
-        Self::set_key(&mut self.port1, 2, window.is_key_down(minifb::Key::Enter));
+        Self::set_key(&mut self.port1, 2, window.is_key_down(minifb::Key::Wdddddd));
         // Always 1
         Self::set_key(&mut self.port1, 3, true);
+
+        // P1 Fire
+        Self::set_key(&mut self.port1, 4, window.is_key_down(minifb::Key::Space));
+        // P1 Left
+        Self::set_key(&mut self.port1, 5, window.is_key_down(minifb::Key::A));
+        // P1 Right
+        Self::set_key(&mut self.port1, 6, window.is_key_down(minifb::Key::D));
+
+        // P2 Fire
+        Self::set_key(&mut self.port2, 4, window.is_key_down(minifb::Key::Enter));
+        // P2 Left
+        Self::set_key(&mut self.port2, 5, window.is_key_down(minifb::Key::Left));
+        // P2 Right
+        Self::set_key(&mut self.port2, 6, window.is_key_down(minifb::Key::Right));
     }
 
     fn set_key(port: &mut u8, bit: u8, on: bool) {
