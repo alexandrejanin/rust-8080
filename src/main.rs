@@ -1,22 +1,20 @@
 #![deny(clippy::pedantic)]
 #![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 
-mod i8080;
-mod machine;
+use invaders::SpaceInvaders;
 
-use crate::machine::Machine;
-use machine::SpaceInvaders;
-use std::time::Duration;
+mod cpu;
+mod invaders;
 
 fn main() {
     // Init machine
-    let mut machine = SpaceInvaders::new();
+    let mut invaders = SpaceInvaders::new();
 
     // Create window
     let mut window = minifb::Window::new(
         "rust-8080",
-        machine.width(),
-        machine.height(),
+        SpaceInvaders::SCREEN_WIDTH,
+        SpaceInvaders::SCREEN_HEIGHT,
         minifb::WindowOptions {
             borderless: false,
             title: true,
@@ -26,17 +24,6 @@ fn main() {
     ).unwrap();
 
     while window.is_open() {
-        machine.step(0.008);
-        std::thread::sleep(Duration::from_millis(8));
-        // Start of frame interrupt
-        machine.interrupt(1);
-
-        machine.step(0.008);
-        std::thread::sleep(Duration::from_millis(8));
-        // VBlank interrupt
-        machine.interrupt(2);
-
-        window.update_with_buffer(&machine.screen()).unwrap();
-        machine.update_input(&window);
+        invaders.step(&mut window);
     }
 }

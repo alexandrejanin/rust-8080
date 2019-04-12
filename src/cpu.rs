@@ -1,5 +1,6 @@
-use crate::machine::IOState;
-use std::{fmt, process};
+use std::{self, fmt, process};
+
+use crate::invaders::IOState;
 
 #[derive(Clone, Copy)]
 #[repr(C)]
@@ -44,18 +45,18 @@ impl RegisterPair {
 
 #[derive(Debug)]
 struct Flags {
-    sign_negative: bool,
+    sign: bool,
     zero: bool,
     aux_carry: bool,
-    even_parity: bool,
+    parity: bool,
     carry: bool,
 }
 
 impl fmt::Display for Flags {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        let mut flags: String = String::from("[");
+        let mut flags = String::new();
 
-        if self.sign_negative {
+        if self.sign {
             flags += "S,"
         }
         if self.zero {
@@ -64,14 +65,12 @@ impl fmt::Display for Flags {
         if self.aux_carry {
             flags += "A,"
         }
-        if self.even_parity {
+        if self.parity {
             flags += "P,"
         }
         if self.carry {
             flags += "C,"
         }
-
-        flags += "]";
 
         write!(f, "{}", flags)
     }
@@ -82,7 +81,7 @@ impl Flags {
     pub fn psw(&self) -> u8 {
         let mut psw = 0;
 
-        if self.sign_negative {
+        if self.sign {
             psw |= 1 << 7
         }
         if self.zero {
@@ -91,7 +90,7 @@ impl Flags {
         if self.aux_carry {
             psw |= 1 << 4
         }
-        if self.even_parity {
+        if self.parity {
             psw |= 1 << 2
         }
         if self.carry {
@@ -104,16 +103,58 @@ impl Flags {
     /// Sets flags from a byte
     pub fn set_psw(&mut self, psw: u8) {
         self.carry = (psw & 1) != 0;
-        self.even_parity = (psw & 1 << 2) != 0;
+        self.parity = (psw & 1 << 2) != 0;
         self.aux_carry = (psw & 1 << 4) != 0;
         self.zero = (psw & 1 << 6) != 0;
-        self.sign_negative = (psw & 1 << 7) != 0;
+        self.sign = (psw & 1 << 7) != 0;
+    }
+
+    fn set_all(&mut self, value: u16) {
+        self.set_sign(value as u8);
+        self.set_zero(value as u8);
+        self.set_aux_carry(value as u8);
+        self.set_parity(value as u8);
+        self.set_carry(value);
+    }
+
+    fn set_all_but_aux_carry(&mut self, value: u16) {
+        self.set_sign(value as u8);
+        self.set_zero(value as u8);
+        self.set_parity(value as u8);
+        self.set_carry(value);
+    }
+
+    fn set_all_but_carry(&mut self, value: u8) {
+        self.set_sign(value);
+        self.set_zero(value);
+        self.set_aux_carry(value);
+        self.set_parity(value);
+    }
+
+    fn set_sign(&mut self, value: u8) {
+        self.sign = value & (1 << 7) != 0;
+    }
+
+    fn set_zero(&mut self, value: u8) {
+        self.zero = value == 0;
+    }
+
+    fn set_aux_carry(&mut self, value: u8) {
+        self.aux_carry = value > 0xf;
+    }
+
+    fn set_parity(&mut self, value: u8) {
+        self.parity = value.count_ones() % 2 == 0;
+    }
+
+    fn set_carry(&mut self, value: u16) {
+        self.carry = value > 0xff;
     }
 }
 
 const MEMORY_SIZE: usize = 0x4000;
 
-pub struct State8080 {
+pub struct CpuState {
     a: u8,
     bc: RegisterPair,
     de: RegisterPair,
@@ -123,11 +164,28 @@ pub struct State8080 {
     memory: [u8; MEMORY_SIZE],
     flags: Flags,
     interrupts_enabled: bool,
-    cycle_debt: u64,
     indent: usize,
 }
 
-impl fmt::Display for State8080 {
+impl fmt::Debug for CpuState {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        writeln!(f, "{:>4} {:>4} {:>4} {:>4} {:>4} {:>4} {:>4}",
+                 "a", "bc", "de", "hl", "pc", "sp", "flags")?;
+
+        write!(f,
+               "{:04x} {:04x} {:04x} {:04x} {:04x} {:04x} {}",
+               self.a,
+               self.bc(),
+               self.de(),
+               self.hl(),
+               self.pc,
+               self.sp,
+               self.flags,
+        )
+    }
+}
+
+impl fmt::Display for CpuState {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         let indent = "\t".repeat(self.indent);
         write!(
@@ -154,7 +212,7 @@ impl fmt::Display for State8080 {
     }
 }
 
-impl State8080 {
+impl CpuState {
     // Public
 
     pub fn new(rom: &[u8]) -> Self {
@@ -172,19 +230,30 @@ impl State8080 {
             memory,
             flags: Flags {
                 zero: false,
-                sign_negative: false,
-                even_parity: false,
+                sign: false,
+                parity: false,
                 carry: false,
                 aux_carry: false,
             },
             interrupts_enabled: false,
-            cycle_debt: 0,
             indent: 0,
         }
     }
 
+    pub fn pc(&self) -> u16 {
+        self.pc
+    }
+
+    pub fn sp(&self) -> u16 {
+        self.sp
+    }
+
     pub fn af(&self) -> u16 {
         (u16::from(self.a) << 8) | u16::from(self.flags.psw())
+    }
+
+    pub fn a(&self) -> u8 {
+        self.a
     }
 
     pub fn bc(&self) -> u16 {
@@ -238,28 +307,6 @@ impl State8080 {
             self.interrupts_enabled = false;
             self.indent += 1;
         }
-    }
-
-    /// Steps the emulator `dt` seconds.
-    /// Returns the number of instructions and cycles that were executed.
-    pub fn step(&mut self, dt: f64, io_state: &mut IOState) -> (u64, u64) {
-        // Simulates 2 MHz
-        const FREQ: f64 = 2_000_000.0;
-
-        // Cycle debt represents how many extra cycles we ran last time, so we run that many less this time
-        let step_cycles = (FREQ * dt) as u64 - self.cycle_debt;
-
-        let mut instructions = 0;
-        let mut spent_cycles = 0;
-
-        while spent_cycles < step_cycles {
-            instructions += 1;
-            spent_cycles += self.emulate(io_state);
-        }
-
-        self.cycle_debt = spent_cycles - step_cycles;
-
-        (instructions, spent_cycles)
     }
 
     // Private
@@ -345,13 +392,13 @@ impl State8080 {
         self.write_byte(address + 1, (value >> 8) as u8);
     }
 
-    fn jmp(&mut self) {
-        self.pc = self.read_bytes_immediate();
+    fn jmp(&mut self, adr: u16) {
+        self.pc = adr;
     }
 
-    fn call(&mut self) {
+    fn call(&mut self, adr: u16) {
         self.push(self.pc + 3);
-        self.pc = self.read_bytes_immediate();
+        self.pc = adr;
         self.indent += 1;
     }
 
@@ -370,87 +417,95 @@ impl State8080 {
         self.write_bytes(self.sp, value);
     }
 
-    /// Sets flags using `value` as the result of the last increment or decrement
-    /// (ignores carry flag)
-    fn set_flags(&mut self, value: u8) {
-        self.flags.zero = value == 0;
-        self.flags.sign_negative = (value & (1 << 7)) != 0;
-        self.flags.even_parity = Self::parity(value);
+    /// Increments `operand`
+    fn inr(&mut self, mut operand: u8) -> u8 {
+        operand += 1;
+        self.flags.set_all_but_carry(operand);
+        operand
+    }
+
+    /// Decrements `operand`
+    fn dcr(&mut self, mut operand: u8) -> u8 {
+        operand -= 1;
+        self.flags.set_all_but_carry(operand);
+        operand
     }
 
     /// Add `operand` to A
     fn add(&mut self, operand: u8) {
         let result: u16 = u16::from(self.a) + u16::from(operand);
-        self.flags.zero = result.trailing_zeros() >= 8;
-        self.flags.sign_negative = (result & (1 << 7)) != 0;
-        self.flags.carry = result > 0xff;
-        self.flags.even_parity = Self::parity(result as u8);
+        self.flags.set_all(result);
         self.a = result as u8;
     }
 
     /// Subtract `operand` from A
     fn sub(&mut self, operand: u8) {
+        let result: u16 = u16::from(self.a) - u16::from(operand);
+        self.flags.set_all(result);
+        self.a = result as u8;
+    }
+
+    /// Subtract `operand` from A with borrow
+    fn sbb(&mut self, operand: u8) {
         let result: u16 = u16::from(self.a) - u16::from(operand + self.flags.carry as u8);
-        self.flags.zero = result.trailing_zeros() >= 8;
-        self.flags.sign_negative = (result & (1 << 7)) != 0;
-        self.flags.carry = (result & 0x0100) != 0;
-        self.flags.even_parity = Self::parity(result as u8);
+        self.flags.set_all(result);
         self.a = result as u8;
     }
 
     /// Add `operand` to HL
     fn dad(&mut self, operand: u16) {
         let result: u32 = u32::from(self.hl()) + u32::from(operand);
-        self.flags.carry = result > 0xffff;
+        self.flags.set_carry(operand);
         *self.hl_mut() = result as u16;
     }
 
     /// Bitwise AND between A and `operand`
     fn and(&mut self, operand: u8) {
-        let result: u8 = self.a & operand;
-        self.flags.zero = result == 0;
-        self.flags.sign_negative = (result & (1 << 7)) != 0;
-        self.flags.carry = false;
-        self.flags.even_parity = Self::parity(result);
-        self.a = result;
+        self.a &= operand;
+        self.flags.set_all(self.a as u16);
     }
 
     /// Bitwise OR between A and `operand`
     fn or(&mut self, operand: u8) {
         self.a |= operand;
-        self.flags.zero = self.a == 0;
-        self.flags.sign_negative = (self.a & (1 << 7)) != 0;
-        self.flags.carry = false;
-        self.flags.even_parity = Self::parity(self.a);
+        self.flags.set_all(self.a as u16);
     }
 
     /// Bitwise XOR between A and `operand`
     fn xor(&mut self, operand: u8) {
         self.a ^= operand;
-        self.flags.zero = self.a == 0;
-        self.flags.sign_negative = (self.a & (1 << 7)) != 0;
-        self.flags.carry = false;
-        self.flags.even_parity = Self::parity(self.a);
+        self.flags.set_all(self.a as u16);
     }
 
     /// Compare `operand` to A
     fn cmp(&mut self, operand: u8) {
-        let result: u8 = self.a.wrapping_sub(operand);
-        self.flags.zero = result == 0;
-        self.flags.sign_negative = (result & (1 << 7)) != 0;
-        self.flags.carry = self.a < operand;
-        self.flags.even_parity = Self::parity(result);
+        self.flags.set_all(self.a as u16 - operand as u16);
     }
 
-    /// Returns true if the byte has an even number of `1`s
-    fn parity(mut x: u8) -> bool {
-        let mut parity = 0_u8;
-        while x != 0 {
-            parity ^= x & 1;
-            x >>= 1;
+    fn daa(&mut self) {
+        let mut result = self.a as u16;
+
+        let lsb = result & 0xf;
+
+        if self.flags.aux_carry || lsb > 9 {
+            result += 6;
+
+            if result & 0xf < lsb {
+                self.flags.aux_carry = true;
+            }
         }
 
-        parity != 0
+        let lsb = result & 0xf;
+        let mut msb = (result >> 4) & 0xf;
+
+        if self.flags.carry || msb > 9 {
+            msb += 6;
+        }
+
+        let answer = (msb << 4) as u16 | lsb as u16;
+        self.flags.set_all_but_aux_carry(answer);
+
+        self.a = answer as u8;
     }
 
     fn next_opcode(&self) -> String {
@@ -458,11 +513,11 @@ impl State8080 {
     }
 
     /// Executes the next instruction.
-    /// Advances PC apporpriately, and returns the number of cycles taken.
-    fn emulate(&mut self, io_state: &mut IOState) -> u64 {
+    /// Advances PC appropriately, and returns the number of cycles taken.
+    pub fn emulate(&mut self, io_state: &mut IOState) -> u64 {
         let op_code = self.read_byte(self.pc);
 
-        if self.pc != 0xada && self.pc != 0xadd && self.pc != 0xade {
+        if cfg!(feature="logging") && self.pc != 0xada && self.pc != 0xadd && self.pc != 0xade {
             println!("{}", self);
         }
 
@@ -486,14 +541,12 @@ impl State8080 {
             }
             // INR B
             0x04 => {
-                *self.b_mut() = self.b().wrapping_add(1);
-                self.set_flags(self.b());
+                *self.b_mut() = self.inr(self.b());
                 (1, 5)
             }
             // DCR B
             0x05 => {
-                *self.b_mut() = self.b().wrapping_sub(1);
-                self.set_flags(self.b());
+                *self.b_mut() = self.dcr(self.b());
                 (1, 5)
             }
             // MVI B, D8
@@ -521,14 +574,12 @@ impl State8080 {
             }
             // INR C
             0x0c => {
-                *self.c_mut() = self.c().wrapping_add(1);
-                self.set_flags(self.c());
+                *self.c_mut() = self.inr(self.c());
                 (1, 5)
             }
             // DCR C
             0x0d => {
-                *self.c_mut() = self.c().wrapping_sub(1);
-                self.set_flags(self.c());
+                *self.c_mut() = self.dcr(self.c());
                 (1, 5)
             }
             // MVI C, D8
@@ -552,6 +603,16 @@ impl State8080 {
             // INX D
             0x13 => {
                 *self.de_mut() += 1;
+                (1, 5)
+            }
+            // INR D
+            0x14 => {
+                *self.d_mut() = self.inr(self.d());
+                (1, 5)
+            }
+            // DCR D
+            0x15 => {
+                *self.d_mut() = self.dcr(self.d());
                 (1, 5)
             }
             // MVI D, D8
@@ -585,9 +646,8 @@ impl State8080 {
             // RAR
             0x1f => {
                 let bit0: u8 = self.a & 1;
-                let bit7: u8 = self.a & (1 << 7);
                 self.a >>= 1;
-                self.a |= bit7;
+                if self.flags.carry { self.a |= 1 << 7; }
                 self.flags.carry = bit0 != 0;
                 (1, 4)
             }
@@ -595,6 +655,11 @@ impl State8080 {
             0x21 => {
                 *self.hl_mut() = self.read_bytes_immediate();
                 (3, 10)
+            }
+            // SHLD adr
+            0x22 => {
+                self.write_bytes(self.read_bytes_immediate(), self.hl());
+                (3, 16)
             }
             // INX H
             0x23 => {
@@ -605,6 +670,11 @@ impl State8080 {
             0x26 => {
                 *self.h_mut() = self.read_byte_immediate();
                 (2, 7)
+            }
+            // DAA
+            0x27 => {
+                self.daa();
+                (1, 4)
             }
             // DAD H
             0x29 => {
@@ -618,7 +688,12 @@ impl State8080 {
             }
             // DCX H
             0x2b => {
-                *self.hl_mut() += 1;
+                *self.hl_mut() -= 1;
+                (1, 5)
+            }
+            // INR L
+            0x2c => {
+                *self.l_mut() = self.inr(self.l());
                 (1, 5)
             }
             // MVI L, D8
@@ -641,10 +716,14 @@ impl State8080 {
                 self.write_byte(self.read_bytes_immediate(), self.a);
                 (3, 13)
             }
+            // INR M
+            0x34 => {
+                *self.m_mut() = self.inr(self.m());
+                (1, 10)
+            }
             // DCR M
             0x35 => {
-                *self.m_mut() = self.m().wrapping_sub(1);
-                self.set_flags(self.m());
+                *self.m_mut() = self.dcr(self.m());
                 (1, 10)
             }
             // MVI M, D8
@@ -662,10 +741,14 @@ impl State8080 {
                 self.a = self.read_byte(self.read_bytes_immediate());
                 (3, 13)
             }
+            // INR A
+            0x3c => {
+                self.a = self.inr(self.a);
+                (1, 5)
+            }
             // DCR A
             0x3d => {
-                self.a = self.a.wrapping_sub(1);
-                self.set_flags(self.a);
+                self.a = self.dcr(self.a);
                 (1, 7)
             }
             // MVI A, D8
@@ -678,10 +761,25 @@ impl State8080 {
                 self.flags.carry = !self.flags.carry;
                 (1, 4)
             }
+            // MOV B,C
+            0x41 => {
+                *self.b_mut() = self.c();
+                (1, 5)
+            }
             // MOV B,M
             0x46 => {
                 *self.b_mut() = self.m();
+                (1, 7)
+            }
+            // MOV B,A
+            0x47 => {
+                *self.b_mut() = self.a;
                 (1, 5)
+            }
+            // MOV C,M
+            0x4e => {
+                *self.c_mut() = self.m();
+                (1, 7)
             }
             // MOV C,A
             0x4f => {
@@ -708,6 +806,16 @@ impl State8080 {
                 *self.e_mut() = self.a;
                 (1, 5)
             }
+            // MOV H,C
+            0x61 => {
+                *self.h_mut() = self.c();
+                (1, 5)
+            }
+            // MOV H,L
+            0x65 => {
+                *self.h_mut() = self.l();
+                (1, 5)
+            }
             // MOV H,M
             0x66 => {
                 *self.h_mut() = self.m();
@@ -718,6 +826,16 @@ impl State8080 {
                 *self.h_mut() = self.a;
                 (1, 5)
             }
+            // MOV L,B
+            0x68 => {
+                *self.l_mut() = self.b();
+                (1, 5)
+            }
+            // MOV L,C
+            0x69 => {
+                *self.l_mut() = self.c();
+                (1, 5)
+            }
             // MOV L,A
             0x6f => {
                 *self.l_mut() = self.a;
@@ -726,6 +844,11 @@ impl State8080 {
             // MOV M,B
             0x70 => {
                 *self.m_mut() = self.b();
+                (1, 7)
+            }
+            // MOV M,C
+            0x71 => {
+                *self.m_mut() = self.c();
                 (1, 7)
             }
             // HLT
@@ -811,6 +934,11 @@ impl State8080 {
             // ADD A
             0x87 => {
                 self.add(self.a);
+                (1, 4)
+            }
+            // SUB A
+            0x97 => {
+                self.sub(self.a);
                 (1, 4)
             }
             // ANA B
@@ -992,13 +1120,13 @@ impl State8080 {
                 if self.flags.zero {
                     (3, 10)
                 } else {
-                    self.jmp();
+                    self.jmp(self.read_bytes_immediate());
                     (0, 10)
                 }
             }
             // JMP adr
             0xc3 => {
-                self.jmp();
+                self.jmp(self.read_bytes_immediate());
                 (0, 10)
             }
             // CNZ adr
@@ -1006,7 +1134,7 @@ impl State8080 {
                 if self.flags.zero {
                     (3, 11)
                 } else {
-                    self.call();
+                    self.call(self.read_bytes_immediate());
                     (0, 17)
                 }
             }
@@ -1037,15 +1165,24 @@ impl State8080 {
             // JZ adr
             0xca => {
                 if self.flags.zero {
-                    self.jmp();
+                    self.jmp(self.read_bytes_immediate());
                     (0, 10)
                 } else {
                     (3, 10)
                 }
             }
+            // CZ adr
+            0xcc => {
+                if self.flags.zero {
+                    self.call(self.read_bytes_immediate());
+                    (0, 17)
+                } else {
+                    (3, 11)
+                }
+            }
             // CALL adr
             0xcd => {
-                self.call();
+                self.call(self.read_bytes_immediate());
                 (0, 17)
             }
             // RNC
@@ -1067,7 +1204,7 @@ impl State8080 {
                 if self.flags.carry {
                     (3, 10)
                 } else {
-                    self.jmp();
+                    self.jmp(self.read_bytes_immediate());
                     (0, 10)
                 }
             }
@@ -1075,6 +1212,15 @@ impl State8080 {
             0xd3 => {
                 io_state.output(self.read_byte_immediate(), self.a);
                 (2, 10)
+            }
+            // CNC adr
+            0xd4 => {
+                if self.flags.carry {
+                    (3, 11)
+                } else {
+                    self.call(self.read_bytes_immediate());
+                    (0, 17)
+                }
             }
             // PUSH D
             0xd5 => {
@@ -1098,7 +1244,7 @@ impl State8080 {
             // JC adr
             0xda => {
                 if self.flags.carry {
-                    self.jmp();
+                    self.jmp(self.read_bytes_immediate());
                     (0, 10)
                 } else {
                     (3, 10)
@@ -1109,6 +1255,11 @@ impl State8080 {
                 self.a = io_state.input(self.read_byte_immediate());
                 (2, 10)
             }
+            // SBI D8
+            0xde => {
+                self.sbb(self.read_byte_immediate());
+                (2, 7)
+            }
             // POP H
             0xe1 => {
                 *self.hl_mut() = self.pop();
@@ -1116,12 +1267,19 @@ impl State8080 {
             }
             // JPO adr
             0xe2 => {
-                if self.flags.even_parity {
+                if self.flags.parity {
                     (3, 10)
                 } else {
-                    self.jmp();
+                    self.jmp(self.read_bytes_immediate());
                     (0, 10)
                 }
+            }
+            // XTHL
+            0xe3 => {
+                let tmp = self.hl();
+                *self.hl_mut() = self.pop();
+                self.push(tmp);
+                (1, 18)
             }
             // PUSH H
             0xe5 => {
@@ -1133,10 +1291,14 @@ impl State8080 {
                 self.and(self.read_byte_immediate());
                 (2, 7)
             }
+            0xe9 => {
+                self.jmp(self.hl());
+                (0, 5)
+            }
             // JPE adr
             0xea => {
-                if self.flags.even_parity {
-                    self.jmp();
+                if self.flags.parity {
+                    self.jmp(self.read_bytes_immediate());
                     (0, 10)
                 } else {
                     (3, 10)
@@ -1157,10 +1319,10 @@ impl State8080 {
             }
             // JP adr
             0xf2 => {
-                if self.flags.sign_negative {
+                if self.flags.sign {
                     (3, 10)
                 } else {
-                    self.jmp();
+                    self.jmp(self.read_bytes_immediate());
                     (0, 10)
                 }
             }
@@ -1181,8 +1343,8 @@ impl State8080 {
             }
             // JM adr
             0xfa => {
-                if self.flags.sign_negative {
-                    self.jmp();
+                if self.flags.sign {
+                    self.jmp(self.read_bytes_immediate());
                     (0, 10)
                 } else {
                     (3, 10)
