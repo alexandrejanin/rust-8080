@@ -5,6 +5,7 @@ use invaders::SpaceInvaders;
 
 mod cpu;
 mod invaders;
+mod flags;
 
 fn main() {
     // Init machine

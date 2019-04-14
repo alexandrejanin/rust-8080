@@ -1,6 +1,6 @@
 use std::{self, fmt, process};
 
-use crate::invaders::IOState;
+use crate::{flags::Flags, invaders::IOState};
 
 #[derive(Clone, Copy)]
 #[repr(C)]
@@ -40,115 +40,6 @@ impl RegisterPair {
     /// Most significant byte
     pub fn msb_mut(&mut self) -> &mut u8 {
         unsafe { &mut self.one.1 }
-    }
-}
-
-#[derive(Debug)]
-struct Flags {
-    sign: bool,
-    zero: bool,
-    aux_carry: bool,
-    parity: bool,
-    carry: bool,
-}
-
-impl fmt::Display for Flags {
-    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        let mut flags = String::new();
-
-        if self.sign {
-            flags += "S,"
-        }
-        if self.zero {
-            flags += "Z,"
-        }
-        if self.aux_carry {
-            flags += "A,"
-        }
-        if self.parity {
-            flags += "P,"
-        }
-        if self.carry {
-            flags += "C,"
-        }
-
-        write!(f, "{}", flags)
-    }
-}
-
-impl Flags {
-    /// Returns flags as a single byte
-    pub fn psw(&self) -> u8 {
-        let mut psw = 0;
-
-        if self.sign {
-            psw |= 1 << 7
-        }
-        if self.zero {
-            psw |= 1 << 6
-        }
-        if self.aux_carry {
-            psw |= 1 << 4
-        }
-        if self.parity {
-            psw |= 1 << 2
-        }
-        if self.carry {
-            psw |= 1
-        }
-
-        psw
-    }
-
-    /// Sets flags from a byte
-    pub fn set_psw(&mut self, psw: u8) {
-        self.carry = (psw & 1) != 0;
-        self.parity = (psw & 1 << 2) != 0;
-        self.aux_carry = (psw & 1 << 4) != 0;
-        self.zero = (psw & 1 << 6) != 0;
-        self.sign = (psw & 1 << 7) != 0;
-    }
-
-    fn set_all(&mut self, value: u16) {
-        self.set_sign(value as u8);
-        self.set_zero(value as u8);
-        self.set_aux_carry(value as u8);
-        self.set_parity(value as u8);
-        self.set_carry(value);
-    }
-
-    fn set_all_but_aux_carry(&mut self, value: u16) {
-        self.set_sign(value as u8);
-        self.set_zero(value as u8);
-        self.set_parity(value as u8);
-        self.set_carry(value);
-    }
-
-    fn set_all_but_carry(&mut self, value: u8) {
-        self.set_sign(value);
-        self.set_zero(value);
-        self.set_aux_carry(value);
-        self.set_parity(value);
-    }
-
-    fn set_sign(&mut self, value: u8) {
-        self.sign = value & (1 << 7) != 0;
-    }
-
-    fn set_zero(&mut self, value: u8) {
-        self.zero = value == 0;
-    }
-
-    fn set_aux_carry(&mut self, value: u8) {
-        self.aux_carry = value > 0xf;
-    }
-
-    fn set_parity(&mut self, value: u8) {
-        self.parity = value.count_ones() % 2 == 0;
-    }
-
-    fn set_carry(&mut self, value: u16) {
-        self.carry = value > 0xff;
     }
 }
 
@@ -212,14 +103,8 @@ impl fmt::Display for CpuState {
     }
 }
 
-impl CpuState {
-    // Public
-
-    pub fn new(rom: &[u8]) -> Self {
-        // Initialize ram and copy rom
-        let mut memory = [0; MEMORY_SIZE];
-        memory[..rom.len()].clone_from_slice(rom);
-
+impl std::default::Default for CpuState {
+    fn default() -> Self {
         Self {
             a: 0,
             bc: RegisterPair::new(),
@@ -227,7 +112,7 @@ impl CpuState {
             hl: RegisterPair::new(),
             sp: 0,
             pc: 0,
-            memory,
+            memory: [0; MEMORY_SIZE],
             flags: Flags {
                 zero: false,
                 sign: false,
@@ -239,6 +124,23 @@ impl CpuState {
             indent: 0,
         }
     }
+}
+
+impl CpuState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn from_rom(rom: &[u8], rom_start: usize, pc_start: u16) -> Self {
+        let mut new = Self::new();
+        new.load_rom(rom, rom_start);
+        new.pc = pc_start;
+        new
+    }
+
+    pub fn load_rom(&mut self, rom: &[u8], rom_start: usize) {
+        self.memory[rom_start..rom_start + rom.len()].clone_from_slice(rom);
+    }
 
     pub fn pc(&self) -> u16 {
         self.pc
@@ -249,7 +151,7 @@ impl CpuState {
     }
 
     pub fn af(&self) -> u16 {
-        (u16::from(self.a) << 8) | u16::from(self.flags.psw())
+        (self.a as u16) << 8 | self.flags.psw() as u16
     }
 
     pub fn a(&self) -> u8 {
@@ -294,6 +196,10 @@ impl CpuState {
 
     pub fn m(&self) -> u8 {
         self.read_byte(self.hl())
+    }
+
+    pub fn flags(&self) -> &Flags {
+        &self.flags
     }
 
     pub fn memory(&self) -> &[u8] {
@@ -370,7 +276,7 @@ impl CpuState {
 
     /// Reads two bytes starting at the specified address
     fn read_bytes(&self, address: u16) -> u16 {
-        (u16::from(self.read_byte(address + 1)) << 8) | u16::from(self.read_byte(address))
+        ((self.read_byte(address + 1) as u16) << 8) | self.read_byte(address) as u16
     }
 
     /// Reads the byte following the current instruction
@@ -433,53 +339,60 @@ impl CpuState {
 
     /// Add `operand` to A
     fn add(&mut self, operand: u8) {
-        let result: u16 = u16::from(self.a) + u16::from(operand);
-        self.flags.set_all(result);
+        let result = self.a as u16 + operand as u16;
+        self.flags.set_all(result, self.a & 0xf + operand & 0xf);
+        self.a = result as u8;
+    }
+
+    /// Add `operand` + carry to A
+    fn adc(&mut self, operand: u8) {
+        let result = self.a as u16 + operand as u16 + self.flags.carry as u16;
+        self.flags.set_all(result, self.a & 0xf + (operand + self.flags.carry as u8) & 0xf);
         self.a = result as u8;
     }
 
     /// Subtract `operand` from A
     fn sub(&mut self, operand: u8) {
-        let result: u16 = u16::from(self.a) - u16::from(operand);
-        self.flags.set_all(result);
+        let result = self.a as u16 - operand as u16;
+        self.flags.set_all(result, self.a & 0xf - operand & 0xf);
         self.a = result as u8;
     }
 
     /// Subtract `operand` from A with borrow
     fn sbb(&mut self, operand: u8) {
-        let result: u16 = u16::from(self.a) - u16::from(operand + self.flags.carry as u8);
-        self.flags.set_all(result);
+        let result = self.a as u16 - operand as u16 - self.flags.carry as u16;
+        self.flags.set_all(result, self.a & 0xf + (operand - self.flags.carry as u8) & 0xf);
         self.a = result as u8;
     }
 
     /// Add `operand` to HL
     fn dad(&mut self, operand: u16) {
-        let result: u32 = u32::from(self.hl()) + u32::from(operand);
-        self.flags.set_carry(operand);
+        let result = self.hl() as u32 + operand as u32;
+        self.flags.set_carry(result as u16);
         *self.hl_mut() = result as u16;
     }
 
     /// Bitwise AND between A and `operand`
     fn and(&mut self, operand: u8) {
         self.a &= operand;
-        self.flags.set_all(self.a as u16);
+        self.flags.set_all(self.a as u16, self.a);
     }
 
     /// Bitwise OR between A and `operand`
     fn or(&mut self, operand: u8) {
         self.a |= operand;
-        self.flags.set_all(self.a as u16);
+        self.flags.set_all(self.a as u16, self.a);
     }
 
     /// Bitwise XOR between A and `operand`
     fn xor(&mut self, operand: u8) {
         self.a ^= operand;
-        self.flags.set_all(self.a as u16);
+        self.flags.set_all(self.a as u16, self.a);
     }
 
     /// Compare `operand` to A
     fn cmp(&mut self, operand: u8) {
-        self.flags.set_all(self.a as u16 - operand as u16);
+        self.flags.set_all(self.a as u16 - operand as u16, self.a & 0xf - operand & 0xf);
     }
 
     fn daa(&mut self) {
@@ -600,6 +513,11 @@ impl CpuState {
                 *self.de_mut() = self.read_bytes_immediate();
                 (3, 10)
             }
+            // STAX D
+            0x12 => {
+                self.write_byte(self.de(), self.a);
+                (1, 7)
+            }
             // INX D
             0x13 => {
                 *self.de_mut() += 1;
@@ -637,6 +555,11 @@ impl CpuState {
             0x1a => {
                 self.a = self.read_byte(self.de());
                 (1, 7)
+            }
+            // DCX D
+            0x1b => {
+                *self.de_mut() -= 1;
+                (1, 5)
             }
             // MVI E, D8
             0x1e => {
@@ -939,6 +862,11 @@ impl CpuState {
             // ADD A
             0x87 => {
                 self.add(self.a);
+                (1, 4)
+            }
+            // ADC D
+            0x8a => {
+                self.adc(self.d());
                 (1, 4)
             }
             // SUB A

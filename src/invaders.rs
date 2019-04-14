@@ -22,7 +22,7 @@ pub struct SpaceInvaders {
 }
 
 impl SpaceInvaders {
-    const CYCLES_PER_FRAME: u64 = 2_000_000 / 60;
+    const CYCLES_PER_FRAME: u64 = 4_000_000 / 60;
     pub const SCREEN_WIDTH: usize = 224;
     pub const SCREEN_HEIGHT: usize = 256;
 
@@ -38,7 +38,7 @@ impl SpaceInvaders {
         Self {
             ref_cpu,
             ref_io_state: SpaceInvadersIO::new(),
-            cpu: CpuState::new(rom),
+            cpu: CpuState::from_rom(rom, 0, 0),
             io_state: SpaceInvadersIO::new(),
             window_buffer: [0; 224 * 256],
             instructions: 0,
@@ -116,15 +116,20 @@ impl SpaceInvaders {
     }
 
     fn cpu_compare(&self) {
-        assert_eq!(self.cpu.pc(), self.ref_cpu.pc.into(), "PC mismatch\n{} frames {} instructions\n{:?}\n{:?}", self.frames, self.instructions, self.cpu, self.ref_cpu);
-        assert_eq!(self.cpu.a(), self.ref_cpu.a.into(), "A mismatch\n{} frames {} instructions\n{:?}\n{:?}", self.frames, self.instructions, self.cpu, self.ref_cpu);
-        assert_eq!(self.cpu.b(), self.ref_cpu.b.into(), "B mismatch\n{} frames {} instructions\n{:?}\n{:?}", self.frames, self.instructions, self.cpu, self.ref_cpu);
-        assert_eq!(self.cpu.c(), self.ref_cpu.c.into(), "C mismatch\n{} frames {} instructions\n{:?}\n{:?}", self.frames, self.instructions, self.cpu, self.ref_cpu);
-        assert_eq!(self.cpu.d(), self.ref_cpu.d.into(), "D mismatch\n{} frames {} instructions\n{:?}\n{:?}", self.frames, self.instructions, self.cpu, self.ref_cpu);
-        assert_eq!(self.cpu.e(), self.ref_cpu.e.into(), "E mismatch\n{} frames {} instructions\n{:?}\n{:?}", self.frames, self.instructions, self.cpu, self.ref_cpu);
-        assert_eq!(self.cpu.h(), self.ref_cpu.h.into(), "H mismatch\n{} frames {} instructions\n{:?}\n{:?}", self.frames, self.instructions, self.cpu, self.ref_cpu);
-        assert_eq!(self.cpu.l(), self.ref_cpu.l.into(), "L mismatch\n{} frames {} instructions\n{:?}\n{:?}", self.frames, self.instructions, self.cpu, self.ref_cpu);
-        assert_eq!(self.cpu.sp(), self.ref_cpu.sp.into(), "SP mismatch\n{} frames {} instructions\n{:?}\n{:?}", self.frames, self.instructions, self.cpu, self.ref_cpu);
+        assert_eq!(self.cpu.pc(), self.ref_cpu.pc.into(), "PC mismatch\n{:?}\n{:?}", self.cpu, self.ref_cpu);
+        assert_eq!(self.cpu.a(), self.ref_cpu.a.into(), "A mismatch\n{:?}\n{:?}", self.cpu, self.ref_cpu);
+        assert_eq!(self.cpu.b(), self.ref_cpu.b.into(), "B mismatch\n{:?}\n{:?}", self.cpu, self.ref_cpu);
+        assert_eq!(self.cpu.c(), self.ref_cpu.c.into(), "C mismatch\n{:?}\n{:?}", self.cpu, self.ref_cpu);
+        assert_eq!(self.cpu.d(), self.ref_cpu.d.into(), "D mismatch\n{:?}\n{:?}", self.cpu, self.ref_cpu);
+        assert_eq!(self.cpu.e(), self.ref_cpu.e.into(), "E mismatch\n{:?}\n{:?}", self.cpu, self.ref_cpu);
+        assert_eq!(self.cpu.h(), self.ref_cpu.h.into(), "H mismatch\n{:?}\n{:?}", self.cpu, self.ref_cpu);
+        assert_eq!(self.cpu.l(), self.ref_cpu.l.into(), "L mismatch\n{:?}\n{:?}", self.cpu, self.ref_cpu);
+        assert_eq!(self.cpu.sp(), self.ref_cpu.sp.into(), "SP mismatch\n{:?}\n{:?}", self.cpu, self.ref_cpu);
+        assert_eq!(self.cpu.flags().sign, self.ref_cpu.conditions.s, "Sign mismatch\n{:?}\n{:?}", self.cpu, self.ref_cpu);
+        assert_eq!(self.cpu.flags().zero, self.ref_cpu.conditions.z, "Zero mismatch\n{:?}\n{:?}", self.cpu, self.ref_cpu);
+        assert_eq!(self.cpu.flags().aux_carry, self.ref_cpu.conditions.ac, "Aux mismatch\n{:?}\n{:?}", self.cpu, self.ref_cpu);
+        assert_eq!(self.cpu.flags().parity, self.ref_cpu.conditions.p, "Parity mismatch\n{:?}\n{:?}", self.cpu, self.ref_cpu);
+        assert_eq!(self.cpu.flags().carry, self.ref_cpu.conditions.cy, "Carry mismatch\n{:?}\n{:?}", self.cpu, self.ref_cpu);
     }
 }
 
@@ -137,7 +142,7 @@ pub struct SpaceInvadersIO {
 }
 
 impl SpaceInvadersIO {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             shift_register: RegisterPair::new(),
             shift_amount: 0,
@@ -151,9 +156,9 @@ impl SpaceInvadersIO {
         // Credit
         Self::set_key(&mut self.port1, 0, window.is_key_down(minifb::Key::C));
         // P2 Start
-        Self::set_key(&mut self.port1, 1, window.is_key_down(minifb::Key::Q));
+        Self::set_key(&mut self.port1, 1, window.is_key_down(minifb::Key::W));
         // P1 Start
-        Self::set_key(&mut self.port1, 2, window.is_key_down(minifb::Key::Wdddddd));
+        Self::set_key(&mut self.port1, 2, window.is_key_down(minifb::Key::Q));
         // Always 1
         Self::set_key(&mut self.port1, 3, true);
 
