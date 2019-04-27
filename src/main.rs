@@ -22,7 +22,7 @@ fn main() {
             resize: false,
             scale: minifb::Scale::X2,
         },
-    ).unwrap();
+    ).expect("Could not create window");
 
     while window.is_open() {
         invaders.step(&mut window);

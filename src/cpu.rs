@@ -55,7 +55,6 @@ pub struct CpuState {
     memory: [u8; MEMORY_SIZE],
     flags: Flags,
     interrupts_enabled: bool,
-    indent: usize,
 }
 
 impl fmt::Debug for CpuState {
@@ -78,17 +77,14 @@ impl fmt::Debug for CpuState {
 
 impl fmt::Display for CpuState {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        let indent = "\t".repeat(self.indent);
         write!(
             f,
-            "{}{:04x}:\t{:02x}\t{}\n\
-             {}a={:02x} b={:02x} c={:02x} d={:02x} e={:02x} h={:02x} l={:02x}\n\
-             {}sp={:04x} flags={}\n",
-            indent,
+            "{:04x}:\t{:02x}\t{}\n\
+             a={:02x} b={:02x} c={:02x} d={:02x} e={:02x} h={:02x} l={:02x}\n\
+             sp={:04x} flags={}\n",
             self.pc,
             self.read_byte(self.pc),
             self.next_opcode(),
-            indent,
             self.a,
             self.b(),
             self.c(),
@@ -96,7 +92,6 @@ impl fmt::Display for CpuState {
             self.e(),
             self.h(),
             self.l(),
-            indent,
             self.sp,
             self.flags
         )
@@ -121,7 +116,6 @@ impl std::default::Default for CpuState {
                 aux_carry: false,
             },
             interrupts_enabled: false,
-            indent: 0,
         }
     }
 }
@@ -211,7 +205,6 @@ impl CpuState {
             self.push(self.pc);
             self.pc = 8 * interrupt_num;
             self.interrupts_enabled = false;
-            self.indent += 1;
         }
     }
 
@@ -305,12 +298,10 @@ impl CpuState {
     fn call(&mut self, adr: u16) {
         self.push(self.pc + 3);
         self.pc = adr;
-        self.indent += 1;
     }
 
     fn ret(&mut self) {
         self.pc = self.pop();
-        self.indent -= 1;
     }
 
     fn pop(&mut self) -> u16 {
@@ -324,52 +315,58 @@ impl CpuState {
     }
 
     /// Increments `operand`
-    fn inr(&mut self, mut operand: u8) -> u8 {
-        operand += 1;
-        self.flags.set_all_but_carry(operand);
-        operand
+    fn inr(&mut self, operand: u8) -> u8 {
+        let result = operand.wrapping_add(1);
+        self.flags.set_all_but_carry(result);
+        result
     }
 
     /// Decrements `operand`
-    fn dcr(&mut self, mut operand: u8) -> u8 {
-        operand -= 1;
-        self.flags.set_all_but_carry(operand);
-        operand
+    fn dcr(&mut self, operand: u8) -> u8 {
+        let result = operand.wrapping_sub(1);
+        self.flags.set_all_but_carry(result);
+        result
     }
 
     /// Add `operand` to A
     fn add(&mut self, operand: u8) {
-        let result = self.a as u16 + operand as u16;
+        let result = (self.a as u16).wrapping_add(operand as u16);
         self.flags.set_all(result, self.a & 0xf + operand & 0xf);
         self.a = result as u8;
     }
 
     /// Add `operand` + carry to A
     fn adc(&mut self, operand: u8) {
-        let result = self.a as u16 + operand as u16 + self.flags.carry as u16;
-        self.flags.set_all(result, self.a & 0xf + (operand + self.flags.carry as u8) & 0xf);
+        let result = (self.a as u16).wrapping_add(operand as u16).wrapping_add(self.flags.carry as u16);
+        self.flags.set_all(result, self.a & 0xf + (operand.wrapping_add(self.flags.carry as u8)) & 0xf);
         self.a = result as u8;
     }
 
     /// Subtract `operand` from A
     fn sub(&mut self, operand: u8) {
-        let result = self.a as u16 - operand as u16;
-        self.flags.set_all(result, self.a & 0xf - operand & 0xf);
+        let result = (self.a as u16).wrapping_sub(operand as u16);
+        self.flags.set_all(result, (self.a & 0xf).wrapping_sub(operand & 0xf));
         self.a = result as u8;
     }
 
     /// Subtract `operand` from A with borrow
     fn sbb(&mut self, operand: u8) {
-        let result = self.a as u16 - operand as u16 - self.flags.carry as u16;
-        self.flags.set_all(result, self.a & 0xf + (operand - self.flags.carry as u8) & 0xf);
+        let result = (self.a as u16).wrapping_sub(operand as u16).wrapping_sub(self.flags.carry as u16);
+        self.flags.set_all(result, self.a & 0xf + (operand.wrapping_sub(self.flags.carry as u8)) & 0xf);
         self.a = result as u8;
     }
 
     /// Add `operand` to HL
     fn dad(&mut self, operand: u16) {
-        let result = self.hl() as u32 + operand as u32;
+        let result = (self.hl() as u32).wrapping_add(operand as u32);
         self.flags.set_carry(result as u16);
         *self.hl_mut() = result as u16;
+    }
+
+    /// Immediate bitwise AND A
+    fn ani(&mut self) {
+        self.a &= self.read_byte_immediate();
+        self.flags.set_all_but_aux_carry(self.a as u16);
     }
 
     /// Bitwise AND between A and `operand`
@@ -381,7 +378,7 @@ impl CpuState {
     /// Bitwise OR between A and `operand`
     fn or(&mut self, operand: u8) {
         self.a |= operand;
-        self.flags.set_all(self.a as u16, self.a);
+        self.flags.set_all(self.a as u16, 0);
     }
 
     /// Bitwise XOR between A and `operand`
@@ -392,7 +389,7 @@ impl CpuState {
 
     /// Compare `operand` to A
     fn cmp(&mut self, operand: u8) {
-        self.flags.set_all(self.a as u16 - operand as u16, self.a & 0xf - operand & 0xf);
+        self.flags.set_all((self.a as u16).wrapping_sub(operand as u16), (self.a & 0xf).wrapping_sub(operand & 0xf));
     }
 
     fn daa(&mut self) {
@@ -449,7 +446,7 @@ impl CpuState {
             }
             // INX B
             0x03 => {
-                *self.bc_mut() += 1;
+                *self.bc_mut() = self.bc().wrapping_add(1);
                 (1, 5)
             }
             // INR B
@@ -520,7 +517,7 @@ impl CpuState {
             }
             // INX D
             0x13 => {
-                *self.de_mut() += 1;
+                *self.de_mut() = self.de().wrapping_add(1);
                 (1, 5)
             }
             // INR D
@@ -558,7 +555,7 @@ impl CpuState {
             }
             // DCX D
             0x1b => {
-                *self.de_mut() -= 1;
+                *self.de_mut() = self.de().wrapping_sub(1);
                 (1, 5)
             }
             // MVI E, D8
@@ -586,7 +583,7 @@ impl CpuState {
             }
             // INX H
             0x23 => {
-                *self.hl_mut() += 1;
+                *self.hl_mut() = self.hl().wrapping_add(1);
                 (1, 5)
             }
             // MVI H, D8
@@ -611,7 +608,7 @@ impl CpuState {
             }
             // DCX H
             0x2b => {
-                *self.hl_mut() -= 1;
+                *self.hl_mut() = self.hl().wrapping_sub(1);
                 (1, 5)
             }
             // INR L
@@ -1221,7 +1218,7 @@ impl CpuState {
             }
             // ANI D8
             0xe6 => {
-                self.and(self.read_byte_immediate());
+                self.ani();
                 (2, 7)
             }
             0xe9 => {
