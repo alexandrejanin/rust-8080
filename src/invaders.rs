@@ -1,6 +1,7 @@
-use std;
-
+#[cfg(feature = "cpu_compare")]
 use i8080;
+
+use std;
 
 use crate::cpu::{CpuState, RegisterPair};
 
@@ -11,7 +12,9 @@ pub trait IOState {
 }
 
 pub struct SpaceInvaders {
+    #[cfg(feature = "cpu_compare")]
     ref_cpu: i8080::Cpu,
+    #[cfg(feature = "cpu_compare")]
     ref_io_state: SpaceInvadersIO,
     cpu: CpuState,
     io_state: SpaceInvadersIO,
@@ -31,13 +34,24 @@ impl SpaceInvaders {
     }
 
     pub fn from_rom(rom: &[u8]) -> Self {
-        let mut ref_cpu = i8080::Cpu::new();
-        ref_cpu.load_into_rom(rom, 0);
-        ref_cpu.pc = 0_u16.into();
+        #[cfg(feature = "cpu_compare")] {
+            let mut ref_cpu = i8080::Cpu::new();
+            ref_cpu.load_into_rom(rom, 0);
+            *ref_cpu.pc = 0;
 
-        Self {
-            ref_cpu,
-            ref_io_state: SpaceInvadersIO::new(),
+            Self {
+                ref_cpu,
+                ref_io_state: SpaceInvadersIO::new(),
+                cpu: CpuState::from_rom(rom, 0, 0),
+                io_state: SpaceInvadersIO::new(),
+                window_buffer: [0; 224 * 256],
+                instructions: 0,
+                cycles: 0,
+                frames: 0,
+            }
+        }
+        #[cfg(not(feature = "cpu_compare"))]
+            Self {
             cpu: CpuState::from_rom(rom, 0, 0),
             io_state: SpaceInvadersIO::new(),
             window_buffer: [0; 224 * 256],
@@ -55,7 +69,9 @@ impl SpaceInvaders {
         self.frames += 1;
 
         // Lastly, update input
-        self.ref_io_state.update_input(&window);
+        #[cfg(feature = "cpu_compare")]
+            self.ref_io_state.update_input(&window);
+
         self.io_state.update_input(window);
 
         std::thread::sleep(std::time::Duration::from_millis(16));
@@ -64,10 +80,12 @@ impl SpaceInvaders {
     fn half_step(&mut self, window: &mut minifb::Window, top_half: bool) {
         let mut cycles_spent = 0;
         while cycles_spent < Self::CYCLES_PER_FRAME / 2 {
-            self.ref_cpu.emulate(&mut self.ref_io_state);
             let cycles = self.cpu.emulate(&mut self.io_state);
 
-            self.cpu_compare();
+            #[cfg(feature = "cpu_compare")] {
+                self.ref_cpu.emulate(&mut self.ref_io_state);
+                self.cpu_compare();
+            }
 
             cycles_spent += cycles;
 
@@ -81,9 +99,10 @@ impl SpaceInvaders {
               .unwrap_or_else(|e| println!("Failed to update window buffer: {}", e));
 
         // Middle/end of frame interrupt
-        if self.ref_cpu.int_enable {
+
+        #[cfg(feature = "cpu_compare")]
             self.ref_cpu.interrupt(if top_half { 8 } else { 16 });
-        }
+
         self.cpu.interrupt(if top_half { 1 } else { 2 });
     }
 
@@ -115,6 +134,7 @@ impl SpaceInvaders {
         &self.window_buffer
     }
 
+    #[cfg(feature = "cpu_compare")]
     fn cpu_compare(&self) {
         assert_eq!(self.cpu.pc(), self.ref_cpu.pc.into(), "PC mismatch\n{:?}\n{:?}", self.cpu, self.ref_cpu);
         assert_eq!(self.cpu.a(), self.ref_cpu.a.into(), "A mismatch\n{:?}\n{:?}", self.cpu, self.ref_cpu);
@@ -209,6 +229,7 @@ impl IOState for SpaceInvadersIO {
     }
 }
 
+#[cfg(feature = "cpu_compare")]
 impl i8080::Machine for SpaceInvadersIO {
     fn input(&mut self, port: u8) -> u8 {
         IOState::input(self, port)
