@@ -1,7 +1,31 @@
 # rust-8080
+
+## About
+
 A WIP Intel 8080 emulator using Rust.
 
 Not feature-complete yet, but can run space invaders.
+
+![Invaders](img/invaders.png)
+
+## Controls
+
+Add credit: C  
+Start with 1 player: Q  
+Start with 2 players: W  
+
+Player 1:
+- Left: A
+- Right: D
+- Fire: Space
+
+Player 2:
+- Left: Left arrow key
+- Right: Right arrow key
+- Fire: Enter
+
+
+## Build options
 
 Build with feature `logging` to enable step-by-step logging (very slow, should be built in release mode).
 
