@@ -331,14 +331,14 @@ impl CpuState {
     /// Add `operand` to A
     fn add(&mut self, operand: u8) {
         let result = (self.a as u16).wrapping_add(operand as u16);
-        self.flags.set_all(result, self.a & 0xf + operand & 0xf);
+        self.flags.set_all(result, (self.a & 0xf).wrapping_add(operand & 0xf));
         self.a = result as u8;
     }
 
     /// Add `operand` + carry to A
     fn adc(&mut self, operand: u8) {
         let result = (self.a as u16).wrapping_add(operand as u16).wrapping_add(self.flags.carry as u16);
-        self.flags.set_all(result, self.a & 0xf + (operand.wrapping_add(self.flags.carry as u8)) & 0xf);
+        self.flags.set_all(result, (self.a & 0xf).wrapping_add(operand.wrapping_add(self.flags.carry as u8) & 0xf));
         self.a = result as u8;
     }
 
@@ -352,7 +352,7 @@ impl CpuState {
     /// Subtract `operand` from A with borrow
     fn sbb(&mut self, operand: u8) {
         let result = (self.a as u16).wrapping_sub(operand as u16).wrapping_sub(self.flags.carry as u16);
-        self.flags.set_all(result, self.a & 0xf + (operand.wrapping_sub(self.flags.carry as u8)) & 0xf);
+        self.flags.set_all(result, (self.a & 0xf).wrapping_sub(operand.wrapping_sub(self.flags.carry as u8) & 0xf));
         self.a = result as u8;
     }
 
@@ -378,13 +378,14 @@ impl CpuState {
     /// Bitwise OR between A and `operand`
     fn or(&mut self, operand: u8) {
         self.a |= operand;
-        self.flags.set_all(self.a as u16, 0);
+        self.flags.set_all_but_aux_carry(self.a as u16);
     }
 
     /// Bitwise XOR between A and `operand`
     fn xor(&mut self, operand: u8) {
         self.a ^= operand;
         self.flags.set_all(self.a as u16, self.a);
+        self.flags.carry = false;
     }
 
     /// Compare `operand` to A
